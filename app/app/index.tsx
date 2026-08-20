@@ -7,10 +7,11 @@ import { API_BASE_URL, describeError } from '@/api/client';
 import { useLogin, useMe, useMoodMatch, useSession } from '@/api/hooks';
 import type { MoodMatch } from '@/api/types';
 import { MoodSlider } from '@/components/MoodSlider';
+import { PlaybackToggle } from '@/components/PlaybackToggle';
 import { NowPlaying } from '@/components/NowPlaying';
-import { setSessionToken } from '@/auth/session';
+import { setSessionToken, spotifyRedirectUri } from '@/auth/session';
 import { moodTheme } from '@/lib/mood';
-import { usePlayback } from '@/playback/usePlayback';
+import { usePlayback, type PlaybackPreference } from '@/playback/usePlayback';
 
 /** Keep the last few picks out of the pool so the slider doesn't loop. */
 const RECENT_MEMORY = 5;
@@ -20,6 +21,7 @@ export default function MoodScreen() {
   const [score, setScore] = useState(50);
   const [match, setMatch] = useState<MoodMatch | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [preference, setPreference] = useState<PlaybackPreference>('auto');
   const recent = useRef<string[]>([]);
 
   const session = useSession();
@@ -38,13 +40,13 @@ export default function MoodScreen() {
           RECENT_MEMORY,
         );
         setMatch(result);
-        await playback.play(result);
+        await playback.play(result, preference);
       } catch (err) {
         setError(describeError(err));
         setMatch(null);
       }
     },
-    [moodMatch, playback],
+    [moodMatch, playback, preference],
   );
 
   if (session.isLoading) {
@@ -93,6 +95,18 @@ export default function MoodScreen() {
           onChange={setScore}
           onCommit={requestTrack}
           disabled={moodMatch.isPending}
+        />
+      </View>
+
+      <View className="mb-3">
+        <PlaybackToggle
+          value={preference}
+          onChange={(next) => {
+            setPreference(next);
+            // Re-route the current track immediately so the choice is audible.
+            if (match) playback.play(match, next);
+          }}
+          hasPremium={Boolean(me.data?.has_premium)}
         />
       </View>
 
@@ -205,7 +219,21 @@ function SignIn({
       ) : null}
 
       {error ? (
-        <Text className="mt-6 text-center text-sm text-rose-400">{describeError(error)}</Text>
+        <View className="mt-6 w-full rounded-xl border border-rose-900/60 bg-rose-950/30 p-4">
+          <Text className="text-center text-sm text-rose-300">{describeError(error)}</Text>
+          {/*
+            Spotify rejects unregistered redirects with "Not matching
+            configuration". Showing the exact value beats making the user
+            reverse-engineer it, since in Expo Go it embeds the dev machine's IP.
+          */}
+          <Text className="mt-3 text-[10px] text-slate-400">
+            Add this exact redirect URI in your Spotify dashboard (Settings →
+            Redirect URIs), or use the web login above instead:
+          </Text>
+          <Text selectable className="mt-1 font-mono text-[11px] text-amber-300">
+            {spotifyRedirectUri()}
+          </Text>
+        </View>
       ) : null}
     </ScrollView>
   );

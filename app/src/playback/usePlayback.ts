@@ -14,6 +14,19 @@ import { pauseSpotify, playViaSpotify } from '@/playback/spotify';
 
 export type PlaybackRoute = 'spotify_remote' | 'spotify_deep_link' | 'preview' | 'none';
 
+/**
+ * What the listener asked for, as opposed to what's available.
+ *
+ * - `auto`    full track when the account and app allow it, else the preview
+ * - `full`    always try Spotify; fall back only if it genuinely can't play
+ * - `preview` always the 30s clip, even on Premium
+ *
+ * `preview` isn't just a fallback: it stays in MoodSync rather than handing the
+ * screen to Spotify, so nudging the slider is quick. That's a reasonable thing
+ * to want on purpose while hunting for a mood.
+ */
+export type PlaybackPreference = 'auto' | 'full' | 'preview';
+
 export interface PlaybackState {
   route: PlaybackRoute;
   isPlaying: boolean;
@@ -56,25 +69,45 @@ export function usePlayback() {
   );
 
   const play = useCallback(
-    async (match: MoodMatch) => {
+    async (match: MoodMatch, preference: PlaybackPreference = 'auto') => {
       stopPreview();
 
-      if (match.playback_mode === 'spotify_remote') {
+      // An explicit preview request is honoured even on Premium.
+      if (preference === 'preview') {
+        if (match.preview_url) {
+          playPreview(match.preview_url, null);
+          return;
+        }
+        setState({
+          route: 'none',
+          isPlaying: false,
+          degradedReason: 'No preview clip for this track. Try Full song.',
+        });
+        return;
+      }
+
+      const canUseSpotify = preference === 'full' || match.playback_mode === 'spotify_remote';
+      if (canUseSpotify) {
         const result = await playViaSpotify(match.track.spotify_uri);
         if (result !== 'failed') {
           setState({
             route: result === 'remote' ? 'spotify_remote' : 'spotify_deep_link',
             isPlaying: true,
-            degradedReason: null,
+            degradedReason:
+              result === 'deep_link'
+                ? 'Playing in the Spotify app — come back to keep sliding.'
+                : null,
           });
           return;
         }
       }
 
       const reason =
-        match.playback_mode === 'spotify_remote'
-          ? 'Spotify app not available - playing a 30s preview.'
-          : 'Spotify Premium required for full tracks - playing a 30s preview.';
+        preference === 'full'
+          ? "Couldn't reach Spotify — is the app installed? Playing a 30s preview."
+          : match.playback_mode === 'spotify_remote'
+            ? 'Spotify app not available - playing a 30s preview.'
+            : 'Spotify Premium required for full tracks - playing a 30s preview.';
 
       if (match.preview_url) {
         playPreview(match.preview_url, reason);

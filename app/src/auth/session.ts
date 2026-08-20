@@ -55,6 +55,21 @@ export async function clearSession(): Promise<void> {
 }
 
 /**
+ * The redirect URI this build will hand Spotify.
+ *
+ * Spotify rejects any redirect it hasn't been told about, with
+ * "redirect_uri: Not matching configuration". In Expo Go this resolves to
+ * `exp://<lan-ip>:8081/--/callback`, which contains the dev machine's IP and so
+ * changes with the network — it has to be registered in the Spotify dashboard
+ * and re-registered when the IP moves. A standalone build gets the stable
+ * `moodsync://callback` instead. Exported so the UI can show the exact string
+ * to paste rather than making the user guess it.
+ */
+export function spotifyRedirectUri(): string {
+  return AuthSession.makeRedirectUri({ scheme: 'moodsync', path: 'callback' });
+}
+
+/**
  * Run Authorization Code + PKCE against Spotify, then exchange the code
  * server-side. Returns the MoodSync session, or null if the user cancelled.
  */
@@ -62,7 +77,7 @@ export async function loginWithSpotify(
   config: SpotifyConfig,
   exchange: (code: string, verifier: string, redirectUri: string) => Promise<MoodSyncSession>,
 ): Promise<MoodSyncSession | null> {
-  const redirectUri = AuthSession.makeRedirectUri({ scheme: 'moodsync', path: 'callback' });
+  const redirectUri = spotifyRedirectUri();
 
   const request = new AuthSession.AuthRequest({
     clientId: config.client_id,
