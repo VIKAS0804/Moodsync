@@ -34,9 +34,13 @@ from app.schemas import AuthCallbackRequest, AuthSessionResponse, MeResponse
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # Everything needed to read the library and drive the App Remote SDK.
+# user-top-read / user-read-recently-played matter more than they look: an
+# account with no Liked Songs and no playlists has nothing else to sync, and
+# listening history needs no curation.
 SCOPES = (
     "user-read-email user-read-private user-library-read "
     "playlist-read-private playlist-read-collaborative "
+    "user-top-read user-read-recently-played "
     "user-read-playback-state user-modify-playback-state streaming"
 )
 

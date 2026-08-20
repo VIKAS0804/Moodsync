@@ -52,6 +52,12 @@ class SyncRequest(BaseModel):
     max_tracks: int = Field(200, ge=1, le=2000)
     playlist_ids: list[str] = Field(default_factory=list)
     analyze: bool = True
+    # Liked Songs alone is empty for anyone who only streams algorithmic feeds,
+    # so pull from every source the granted scopes allow by default.
+    include_saved: bool = True
+    include_playlists: bool = True
+    include_top: bool = True
+    include_recent: bool = True
 
 
 class SyncResponse(BaseModel):
@@ -61,6 +67,10 @@ class SyncResponse(BaseModel):
     isrc_coverage: float
     queued_for_analysis: int
     already_scored: int
+    # Per-source counts before de-duplication, so an empty result is diagnosable
+    # rather than just zero.
+    sources: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
 
 # ----------------------------------------------------------------------- mood

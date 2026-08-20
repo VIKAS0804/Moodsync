@@ -29,6 +29,7 @@ So the core of this project is a **mood-scoring pipeline built from scratch**:
 | Deriving mood | Local DSP feature extraction (librosa) → a weighted model calibrated against real audio → a 1–100 score |
 | Cost of recomputing | Scores **and their feature vectors** are cached in PostgreSQL |
 | Can't stream Spotify audio in-app | Licensing, not a technical gap. Playback is handed off to the Spotify app, with a preview fallback |
+| Playlist contents are 403 for new apps | Same restriction family. `/sync` pulls Liked Songs, top tracks and recent plays instead, and says so when a playlist is refused |
 
 ## Architecture
 
@@ -287,6 +288,22 @@ onsets/sec. It's now an absolute flux floor (ambient peaks ~1.4, real music 7–
 
 Both are why `scripts/calibrate.py` exists: correctness here has to be measured against
 real audio, not synthetic signals.
+
+## Measured on a real library
+
+First end-to-end run against a real Spotify account (50 Liked Songs):
+
+| Metric | Result |
+|---|---|
+| ISRC match rate | **100%** (50/50) |
+| Analysis coverage | **92%** (46/50 scored) |
+| Failed analyses | 0 |
+| No preview in any catalog | 4 (8%) |
+| Score range found | 20-80 |
+
+That library contains nothing above 80, which is exactly the case
+library-relative scoring exists for: slider 95 still returns its most intense
+track instead of searching near 95 and finding nothing.
 
 ## Status
 

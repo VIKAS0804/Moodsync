@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -74,17 +74,86 @@ async def sync_library(
     """Pull the user's saved tracks (and any named playlists), then queue scoring."""
     token = await spotify_access_token(user, db, settings)
 
-    async with SpotifyClient(access_token=token) as client:
+    items: list[SpotifyTrack] = []
+    sources: dict[str, int] = {}
+    warnings: list[str] = []
+
+    seen_warnings: set[str] = set()
+
+    def warn(message: str) -> None:
+        if message not in seen_warnings:
+            seen_warnings.add(message)
+            warnings.append(message)
+
+    async def collect(name: str, coro):
+        """Run one source. A failure there must not lose the other sources.
+
+        A missing scope or an account feature that simply isn't populated should
+        degrade to "0 from that source", not a failed sync. The two 403 variants
+        mean very different things and get different advice:
+
+        * "Insufficient client scope" -- the token predates a scope we now ask
+          for. Signing in again fixes it.
+        * plain "Forbidden" -- Spotify policy. Playlist *contents* are not
+          readable by new third-party apps, even for playlists the user owns
+          (the playlist object itself still reads, and `tracks.total` comes back
+          null). Same restriction family as audio-features; no scope helps.
+        """
         try:
-            items = await client.get_saved_tracks(max_tracks=payload.max_tracks)
-            for playlist_id in payload.playlist_ids:
-                items.extend(
-                    await client.get_playlist_tracks(playlist_id, max_tracks=payload.max_tracks)
-                )
+            found = await coro
         except SpotifyError as exc:
-            raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+            sources[name] = 0
+            detail = (exc.message or "").lower()
+            if "insufficient client scope" in detail:
+                warn(
+                    "Your session predates a permission this app now requests. "
+                    "Sign in again at /auth/spotify/login to enable top tracks "
+                    "and recently played."
+                )
+            elif exc.status == 403 and name.startswith("playlist"):
+                warn(
+                    "Spotify refuses playlist contents to new third-party apps, "
+                    "even for playlists you own. Liked Songs still works: in "
+                    "Spotify, select a playlist's tracks and 'Add to Liked Songs', "
+                    "then sync again."
+                )
+            else:
+                warn(f"{name}: Spotify returned {exc.status}")
+            log.warning("sync source %s failed: %s", name, exc)
+            return
+        sources[name] = len(found)
+        items.extend(found)
+
+    async with SpotifyClient(access_token=token) as client:
+        if payload.include_saved:
+            await collect("saved", client.get_saved_tracks(max_tracks=payload.max_tracks))
+        if payload.include_top:
+            await collect("top", client.get_top_tracks(limit=50))
+        if payload.include_recent:
+            await collect("recently_played", client.get_recently_played(limit=50))
+
+        playlist_ids = list(payload.playlist_ids)
+        if payload.include_playlists and not playlist_ids:
+            # Discover the user's playlists rather than making the caller know ids.
+            try:
+                discovered = await client.get_playlists()
+                playlist_ids = [p["id"] for p in discovered if p.get("id")]
+                sources["playlists_found"] = len(playlist_ids)
+            except SpotifyError as exc:
+                warnings.append(f"playlists: Spotify returned {exc.status}")
+
+        for playlist_id in playlist_ids:
+            await collect(
+                f"playlist:{playlist_id}",
+                client.get_playlist_tracks(playlist_id, max_tracks=payload.max_tracks),
+            )
 
     seen: dict[str, SpotifyTrack] = {i.spotify_track_id: i for i in items}
+    if not seen:
+        warn(
+            "Nothing found in Liked Songs, playlists, top tracks or recent plays. "
+            "Like some songs in Spotify (or play a few) and sync again."
+        )
     existing_ids = set(
         db.execute(
             select(UserTrack.track_id).where(UserTrack.user_id == user.id)
@@ -131,6 +200,8 @@ async def sync_library(
         isrc_coverage=round(with_isrc / len(track_rows), 4) if track_rows else 0.0,
         queued_for_analysis=queued,
         already_scored=len(scored_ids),
+        sources=sources,
+        warnings=warnings,
     )
 
 

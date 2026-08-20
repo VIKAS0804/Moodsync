@@ -211,6 +211,50 @@ class SpotifyClient:
             offset += len(items)
         return tracks[:max_tracks]
 
+    async def get_playlists(self, max_playlists: int = 50) -> list[dict[str, Any]]:
+        """The user's own + followed playlists, so /sync needn't be told their ids."""
+        out: list[dict[str, Any]] = []
+        offset = 0
+        while len(out) < max_playlists:
+            page = await self._get("/me/playlists", limit=50, offset=offset)
+            items = [p for p in (page.get("items") or []) if p]
+            if not items:
+                break
+            out.extend(items)
+            if not page.get("next"):
+                break
+            offset += len(items)
+        return out[:max_playlists]
+
+    async def get_top_tracks(
+        self, limit: int = 50, time_range: str = "medium_term"
+    ) -> list[SpotifyTrack]:
+        """Requires the user-top-read scope."""
+        payload = await self._get(
+            "/me/top/tracks", limit=min(limit, 50), time_range=time_range
+        )
+        out = []
+        for item in payload.get("items") or []:
+            parsed = SpotifyTrack.from_api(item or {})
+            if parsed:
+                out.append(parsed)
+        return out
+
+    async def get_recently_played(self, limit: int = 50) -> list[SpotifyTrack]:
+        """Requires user-read-recently-played.
+
+        Useful when an account has no Liked Songs and no playlists -- listening
+        history needs no curation, so it's the one source that's populated for
+        somebody who just streams algorithmic feeds.
+        """
+        payload = await self._get("/me/player/recently-played", limit=min(limit, 50))
+        out = []
+        for item in payload.get("items") or []:
+            parsed = SpotifyTrack.from_api((item or {}).get("track") or {})
+            if parsed:
+                out.append(parsed)
+        return out
+
     async def get_tracks(self, track_ids: list[str]) -> list[SpotifyTrack]:
         """Batch lookup (50 per call) -- used to backfill ISRCs."""
         out: list[SpotifyTrack] = []

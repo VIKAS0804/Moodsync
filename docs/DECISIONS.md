@@ -161,3 +161,35 @@ fix before real users.
 
 The system Python here is 3.14, which the librosa/numba stack doesn't reliably support
 yet. Pinning the range avoids a confusing wall of build errors for anyone cloning this.
+
+
+---
+
+## 8. Which Spotify sources `/sync` can actually read
+
+**Decided: Liked Songs, top tracks and recently played. Playlists are not
+readable and the code says so out loud.**
+
+Measured against a real account, playlist *contents* return `403 Forbidden` for
+this app — for playlists the user **owns**, not just editorial ones. The
+playlist object itself reads fine and `/me/playlists` lists them, but
+`tracks.total` comes back `null` and `/playlists/{id}/tracks` is refused. No
+scope changes that; `playlist-read-private` was granted.
+
+This is the same restriction family as `audio-features`: Spotify closing data
+to new third-party apps. Worth distinguishing the two 403s, because they look
+identical until you read the body:
+
+* `"Insufficient client scope"` — the token predates a scope the app now asks
+  for. Signing in again fixes it.
+* `"Forbidden"` — policy. Nothing to fix client-side.
+
+So `/sync` reads from every source that does work, reports per-source counts so
+an empty result is diagnosable rather than just zero, and when a playlist is
+refused it tells the user the workaround that does work: select the playlist's
+tracks in Spotify, "Add to Liked Songs", sync again.
+
+The practical cost is real. A user whose music lives in playlists — which was
+true of the first real account tested, with 45 playlists — sees nothing until
+they add tracks to Liked Songs. That is a platform limitation being passed to
+the user, and there is no way around it from here.
