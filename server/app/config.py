@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     spotify_client_id: str = ""
     spotify_client_secret: str = ""  # only needed for confidential-client flows
     spotify_redirect_uri: str = "moodsync://callback"
+    # Redirect for the server-side browser login (GET /auth/spotify/login).
+    # Spotify requires HTTPS or a loopback *IP literal* -- "localhost" is
+    # rejected, so this must be 127.0.0.1.
+    spotify_web_redirect_uri: str = "http://127.0.0.1:8000/auth/spotify/callback"
 
     # --- Apple Music (developer token is signed locally with an ES256 .p8 key) ---
     apple_team_id: str = ""

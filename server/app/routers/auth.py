@@ -1,17 +1,26 @@
 """Spotify OAuth.
 
-The mobile app is a public client, so it runs Authorization Code + PKCE and
-never holds a client secret. It ships the code + verifier here; the server does
-the token exchange, keeps the Spotify tokens, and hands back an opaque session
-token of its own.
+Two ways in, both Authorization Code + PKCE, both ending in an opaque MoodSync
+session token so the Spotify tokens never leave the server:
+
+* `POST /auth/spotify/callback` -- the mobile app does PKCE on-device and posts
+  the code here. Public client, so no client secret is involved.
+* `GET /auth/spotify/login` -- the server does the whole dance and renders the
+  session token in the browser. This exists because registering an Expo Go
+  redirect URI (`exp://<lan-ip>:8081`) with Spotify is painful and the IP moves,
+  so signing in from a laptop is the quickest route to real data.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -36,7 +45,14 @@ SCOPES = (
 def spotify_config(settings: Settings = Depends(settings_dep)) -> dict[str, str]:
     """Client id / redirect / scopes, so they live in one place instead of two."""
     if not settings.spotify_client_id:
-        raise HTTPException(status_code=503, detail="SPOTIFY_CLIENT_ID is not configured")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "SPOTIFY_CLIENT_ID is not configured. Create a free app at "
+                "https://developer.spotify.com/dashboard and put its client id in "
+                "server/.env -- a Spotify account alone isn't enough."
+            ),
+        )
     return {
         "client_id": settings.spotify_client_id,
         "redirect_uri": settings.spotify_redirect_uri,
@@ -45,22 +61,151 @@ def spotify_config(settings: Settings = Depends(settings_dep)) -> dict[str, str]
     }
 
 
-@router.post("/spotify/callback", response_model=AuthSessionResponse)
-async def spotify_callback(
-    payload: AuthCallbackRequest,
+# --------------------------------------------------------------------------
+# Browser login.
+#
+# The mobile app does PKCE on-device and POSTs the code to the endpoint below.
+# That requires a redirect URI Spotify will accept, which in Expo Go means an
+# `exp://<lan-ip>:8081` URL that changes with the network -- painful to register.
+#
+# This pair does the same dance server-side so you can sign in from a laptop
+# browser and get a session token immediately. Register exactly one redirect URI
+# for it: http://127.0.0.1:8000/auth/spotify/callback
+# --------------------------------------------------------------------------
+
+# state -> (code_verifier, created_at). In-process and single-node on purpose;
+# this is a login handshake measured in seconds, not session storage.
+_PENDING: dict[str, tuple[str, float]] = {}
+_PENDING_TTL_SECONDS = 600
+
+
+def _pkce_pair() -> tuple[str, str]:
+    verifier = secrets.token_urlsafe(96)[:128]
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return verifier, challenge
+
+
+def _remember(state: str, verifier: str) -> None:
+    now = time.time()
+    for key, (_, created) in list(_PENDING.items()):
+        if now - created > _PENDING_TTL_SECONDS:
+            _PENDING.pop(key, None)
+    _PENDING[state] = (verifier, now)
+
+
+def _page(title: str, body: str, *, ok: bool = True) -> HTMLResponse:
+    colour = "#34d399" if ok else "#fb7185"
+    return HTMLResponse(
+        f"""<!doctype html><html><head><meta charset="utf-8">
+<title>MoodSync — {title}</title></head>
+<body style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+background:#0B1020;color:#e2e8f0;padding:48px;line-height:1.6">
+<h2 style="color:{colour};margin-top:0">{title}</h2>{body}
+</body></html>""",
+        status_code=200 if ok else 400,
+    )
+
+
+@router.get("/spotify/login")
+def spotify_login(settings: Settings = Depends(settings_dep)):
+    """Kick off the browser login. Open this URL directly in a browser."""
+    if not settings.spotify_client_id:
+        return _page(
+            "Spotify isn't configured",
+            "<p>Set <code>SPOTIFY_CLIENT_ID</code> in <code>server/.env</code>.</p>"
+            '<p>Create a free app at <a style="color:#38bdf8" '
+            'href="https://developer.spotify.com/dashboard">developer.spotify.com/dashboard</a>'
+            " — a Spotify account by itself is not enough.</p>",
+            ok=False,
+        )
+
+    verifier, challenge = _pkce_pair()
+    state = secrets.token_urlsafe(24)
+    _remember(state, verifier)
+
+    url = SpotifyClient.authorize_url(
+        client_id=settings.spotify_client_id,
+        redirect_uri=settings.spotify_web_redirect_uri,
+        code_challenge=challenge,
+        scopes=SCOPES,
+    )
+    return RedirectResponse(f"{url}&state={state}")
+
+
+@router.get("/spotify/callback")
+async def spotify_callback_browser(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
     db: Session = Depends(get_db),
     settings: Settings = Depends(settings_dep),
-) -> AuthSessionResponse:
-    if not settings.spotify_client_id:
-        raise HTTPException(status_code=503, detail="SPOTIFY_CLIENT_ID is not configured")
+):
+    """Where Spotify sends the browser back. Exchanges the code for a session."""
+    if error:
+        return _page("Spotify declined", f"<p><code>{error}</code></p>", ok=False)
+    if not code or not state:
+        return _page("Missing code or state", "<p>Start again at /auth/spotify/login</p>", ok=False)
 
+    entry = _PENDING.pop(state, None)
+    if entry is None:
+        return _page(
+            "Unknown or expired login",
+            "<p>That state value isn't one we issued (or it expired). "
+            "Start again at <code>/auth/spotify/login</code>.</p>",
+            ok=False,
+        )
+
+    session = await _establish_session(
+        db=db,
+        settings=settings,
+        code=code,
+        code_verifier=entry[0],
+        redirect_uri=settings.spotify_web_redirect_uri,
+    )
+
+    return _page(
+        f"Signed in as {session.display_name}",
+        f"""
+<p>Spotify plan: <b>{session.product or "unknown"}</b> &middot;
+playback mode: <b>{session.playback_mode}</b></p>
+<p>Session token:</p>
+<pre style="background:#1B2540;padding:14px;border-radius:8px;overflow-x:auto"
+>{session.session_token}</pre>
+<p>Pull in your real library, then analyse it:</p>
+<pre style="background:#1B2540;padding:14px;border-radius:8px;overflow-x:auto"
+>curl -X POST localhost:8000/sync \\
+  -H "Authorization: Bearer {session.session_token}" \\
+  -H "Content-Type: application/json" \\
+  -d '{{"max_tracks": 50, "analyze": true}}'
+
+curl localhost:8000/sync/status -H "Authorization: Bearer {session.session_token}"
+curl localhost:8000/mood/80     -H "Authorization: Bearer {session.session_token}"</pre>
+<p style="color:#94a3b8">Analysis runs in the background — watch the server log,
+and poll <code>/sync/status</code> until <code>pending</code> hits 0.</p>""",
+    )
+
+
+async def _establish_session(
+    *,
+    db: Session,
+    settings: Settings,
+    code: str,
+    code_verifier: str,
+    redirect_uri: str,
+) -> AuthSessionResponse:
+    """Exchange an authorization code, upsert the user, issue a session token.
+
+    Shared by the mobile POST callback and the browser GET callback so there is
+    one place where Spotify tokens are persisted.
+    """
     async with SpotifyClient() as client:
         try:
             tokens = await client.exchange_code(
-                code=payload.code,
-                code_verifier=payload.code_verifier,
+                code=code,
+                code_verifier=code_verifier,
                 client_id=settings.spotify_client_id,
-                redirect_uri=payload.redirect_uri or settings.spotify_redirect_uri,
+                redirect_uri=redirect_uri,
                 client_secret=settings.spotify_client_secret or None,
             )
         except SpotifyError as exc:
@@ -93,6 +238,24 @@ async def spotify_callback(
         product=user.product,
         has_premium=user.has_premium,
         playback_mode="spotify_remote" if user.has_premium else "preview_fallback",
+    )
+
+
+@router.post("/spotify/callback", response_model=AuthSessionResponse)
+async def spotify_callback(
+    payload: AuthCallbackRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(settings_dep),
+) -> AuthSessionResponse:
+    if not settings.spotify_client_id:
+        raise HTTPException(status_code=503, detail="SPOTIFY_CLIENT_ID is not configured")
+
+    return await _establish_session(
+        db=db,
+        settings=settings,
+        code=payload.code,
+        code_verifier=payload.code_verifier,
+        redirect_uri=payload.redirect_uri or settings.spotify_redirect_uri,
     )
 
 
