@@ -2,6 +2,11 @@
 module.exports = {
   content: ['./app/**/*.{js,jsx,ts,tsx}', './src/**/*.{js,jsx,ts,tsx}'],
   presets: [require('nativewind/preset')],
+  // Must be 'class', not Tailwind's default 'media'. NativeWind's web runtime
+  // installs a MutationObserver that *sets* the colour scheme, and setting it
+  // throws when the mode is 'media' ("Cannot manually set color scheme").
+  // Nothing here uses `dark:` variants anyway -- the palette is hardcoded dark.
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
