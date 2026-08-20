@@ -167,29 +167,50 @@ yet. Pinning the range avoids a confusing wall of build errors for anyone clonin
 
 ## 8. Which Spotify sources `/sync` can actually read
 
-**Decided: Liked Songs, top tracks and recently played. Playlists are not
-readable and the code says so out loud.**
+**Decided: Liked Songs, playlists, top tracks and recently played.**
 
-Measured against a real account, playlist *contents* return `403 Forbidden` for
-this app — for playlists the user **owns**, not just editorial ones. The
-playlist object itself reads fine and `/me/playlists` lists them, but
-`tracks.total` comes back `null` and `/playlists/{id}/tracks` is refused. No
-scope changes that; `playlist-read-private` was granted.
+> **Correction (2026-08-20).** An earlier version of this entry claimed playlist
+> contents were unreadable — "the same restriction family as `audio-features`,
+> no scope changes that". **That was wrong, and it was wrong in the most
+> expensive way: it told a user their own data was permanently inaccessible.**
+>
+> `/playlists/{id}/tracks` is *deprecated* and answers `403 Forbidden`. The
+> replacement is `/playlists/{id}/items`, and on it Spotify also renamed each
+> element's nested object from `track` to `item` (the outer array is still
+> `items`). Switching endpoint turned a 403 into 249 tracks from the very
+> playlist I had declared unreachable.
+>
+> What made this easy to get wrong: the 403 body is just
+> `{"error": {"status": 403, "message": "Forbidden"}}` — no mention of
+> deprecation — and it reproduced on a playlist the user *owned*, which pointed
+> convincingly at policy. `/me/playlists` also reports `tracks.total` as null,
+> which looked like corroborating evidence of redaction.
+>
+> The lesson: "403 on an endpoint that should work" is at least as likely to be
+> a moved endpoint as a permissions problem, and the way to tell them apart is
+> to try the current URL, not to reason about policy. Credit to
+> [VibeScape](https://github.com/chandankeelara/VibeScape), which documents the
+> rename in `ingest/spotify_library.py`.
 
-This is the same restriction family as `audio-features`: Spotify closing data
-to new third-party apps. Worth distinguishing the two 403s, because they look
-identical until you read the body:
+Sources, all de-duplicated by track id:
+
+| Source | Endpoint | Notes |
+|---|---|---|
+| Liked Songs | `/me/tracks` | nested key `track` |
+| Playlists | `/playlists/{id}/items` | nested key `item`; auto-discovered via `/me/playlists` |
+| Top tracks | `/me/top/tracks` | needs `user-top-read` |
+| Recently played | `/me/player/recently-played` | needs `user-read-recently-played` |
+
+Listening history matters more than it looks: an account with no Liked Songs and
+no playlists has nothing else to offer, and history needs no curation.
+
+Two 403 variants still worth telling apart, because they look identical until
+you read the body:
 
 * `"Insufficient client scope"` — the token predates a scope the app now asks
   for. Signing in again fixes it.
-* `"Forbidden"` — policy. Nothing to fix client-side.
+* `"Forbidden"` — either policy **or a deprecated endpoint**. Check the endpoint
+  first.
 
-So `/sync` reads from every source that does work, reports per-source counts so
-an empty result is diagnosable rather than just zero, and when a playlist is
-refused it tells the user the workaround that does work: select the playlist's
-tracks in Spotify, "Add to Liked Songs", sync again.
-
-The practical cost is real. A user whose music lives in playlists — which was
-true of the first real account tested, with 45 playlists — sees nothing until
-they add tracks to Liked Songs. That is a platform limitation being passed to
-the user, and there is no way around it from here.
+`/sync` reports per-source counts so an empty result is diagnosable rather than
+just zero.

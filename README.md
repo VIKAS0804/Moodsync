@@ -29,7 +29,7 @@ So the core of this project is a **mood-scoring pipeline built from scratch**:
 | Deriving mood | Local DSP feature extraction (librosa) → a weighted model calibrated against real audio → a 1–100 score |
 | Cost of recomputing | Scores **and their feature vectors** are cached in PostgreSQL |
 | Can't stream Spotify audio in-app | Licensing, not a technical gap. Playback is handed off to the Spotify app, with a preview fallback |
-| Playlist contents are 403 for new apps | Same restriction family. `/sync` pulls Liked Songs, top tracks and recent plays instead, and says so when a playlist is refused |
+| `/playlists/{id}/tracks` now 403s | Deprecated and replaced by `/playlists/{id}/items`, where the nested key is `item` not `track`. The 403 body says only "Forbidden", so it's easy to misread as a permissions problem |
 
 ## Architecture
 

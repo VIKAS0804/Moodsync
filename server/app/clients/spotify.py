@@ -182,7 +182,7 @@ class SpotifyClient:
             if not items:
                 break
             for item in items:
-                parsed = SpotifyTrack.from_api(item.get("track") or {})
+                parsed = SpotifyTrack.from_api(self._nested_track(item))
                 if parsed:
                     tracks.append(parsed)
             if not page.get("next"):
@@ -190,20 +190,48 @@ class SpotifyClient:
             offset += len(items)
         return tracks[:max_tracks]
 
+    @staticmethod
+    def _nested_track(item: dict[str, Any]) -> dict[str, Any]:
+        """Pull the track object out of a playlist/library entry.
+
+        Spotify renamed the nested field from `track` to `item` on playlist
+        responses. The outer array is still `items`. `/me/tracks` and
+        `/me/top/tracks` still use `track`, so accept either and prefer the
+        legacy shape in case the rename is reverted.
+        """
+        if not isinstance(item, dict):
+            return {}
+        for key in ("track", "item"):
+            value = item.get(key)
+            if isinstance(value, dict):
+                return value
+        return {}
+
     async def get_playlist_tracks(
         self, playlist_id: str, max_tracks: int = 500
     ) -> list[SpotifyTrack]:
+        """Read a playlist's contents.
+
+        Uses `/playlists/{id}/items`. The older `/playlists/{id}/tracks` is
+        deprecated and now answers **403 Forbidden** -- which reads like a
+        permissions or policy problem rather than a moved endpoint, and is easy
+        to misdiagnose as such. Verified against a real account: `/tracks` 403s
+        while `/items` returns the full 249-track playlist.
+        """
         tracks: list[SpotifyTrack] = []
         offset = 0
         while len(tracks) < max_tracks:
             page = await self._get(
-                f"/playlists/{playlist_id}/tracks", limit=100, offset=offset, market="from_token"
+                f"/playlists/{playlist_id}/items", limit=100, offset=offset
             )
             items = page.get("items", [])
             if not items:
                 break
             for item in items:
-                parsed = SpotifyTrack.from_api(item.get("track") or {})
+                nested = self._nested_track(item)
+                if nested.get("is_local"):
+                    continue  # local files have no id and no preview
+                parsed = SpotifyTrack.from_api(nested)
                 if parsed:
                     tracks.append(parsed)
             if not page.get("next"):
@@ -250,7 +278,7 @@ class SpotifyClient:
         payload = await self._get("/me/player/recently-played", limit=min(limit, 50))
         out = []
         for item in payload.get("items") or []:
-            parsed = SpotifyTrack.from_api((item or {}).get("track") or {})
+            parsed = SpotifyTrack.from_api(self._nested_track(item or {}))
             if parsed:
                 out.append(parsed)
         return out
