@@ -57,7 +57,7 @@ def _counts(db, user_id: str) -> dict[str, int]:
     return {"total": int(total), "scored": int(scored), "no_preview": int(no_preview)}
 
 
-def main() -> int:
+async def run() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--status", action="store_true", help="Report and exit")
     parser.add_argument("--limit", type=int, default=0, help="Max tracks this run (0 = all)")
@@ -108,7 +108,7 @@ def main() -> int:
                 print("Queue empty.")
                 break
 
-            results = asyncio.run(analyze_many(ids, settings))
+            results = await analyze_many(ids, settings)
             processed += len(results)
 
             tally: dict[str, int] = {}
@@ -125,13 +125,22 @@ def main() -> int:
                 flush=True,
             )
 
-            # The guard. If a batch neither scored nor reached a terminal state,
-            # something upstream is failing (throttling, network) and hammering
-            # it harder won't help.
+            # Guards. Progress means scored or terminal; anything else and
+            # retrying harder won't help.
             if tally.get("scored", 0) == 0 and tally.get("skipped", 0) == 0:
                 print(
                     "No progress in this batch — stopping rather than spinning. "
                     "Deferred tracks stay queued; try again later.",
+                    file=sys.stderr,
+                )
+                break
+            # A batch that mostly *errors* is a bug or an outage, not work to
+            # grind through. One scored track shouldn't license 24 failures.
+            failed = tally.get("failed", 0)
+            if failed > len(results) / 2:
+                print(
+                    f"{failed}/{len(results)} failed in one batch — stopping. "
+                    "Check the analysis_jobs error column.",
                     file=sys.stderr,
                 )
                 break
@@ -148,6 +157,10 @@ def main() -> int:
         return 0
     finally:
         db.close()
+
+
+def main() -> int:
+    return asyncio.run(run())
 
 
 if __name__ == "__main__":

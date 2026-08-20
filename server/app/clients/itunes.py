@@ -50,15 +50,31 @@ class ITunesTransient(RuntimeError):
 
 
 class _Throttle:
-    """Process-wide minimum spacing between requests to a public API."""
+    """Process-wide minimum spacing between requests to a public API.
+
+    The lock is created lazily and rebuilt whenever the running loop changes.
+    An `asyncio.Lock` binds to the loop that first awaits it, so a module-level
+    one breaks the moment a second `asyncio.run()` comes along -- every call
+    raises "bound to a different event loop", which surfaces as a failed track
+    rather than anything mentioning locks. Batch drivers that call
+    `asyncio.run()` per batch hit this immediately.
+    """
 
     def __init__(self, min_interval: float):
         self.min_interval = min_interval
-        self._lock = asyncio.Lock()
         self._last = 0.0
+        self._lock: asyncio.Lock | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _for_current_loop(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self._lock is None or self._loop is not loop:
+            self._lock = asyncio.Lock()
+            self._loop = loop
+        return self._lock
 
     async def wait(self) -> None:
-        async with self._lock:
+        async with self._for_current_loop():
             gap = time.monotonic() - self._last
             if gap < self.min_interval:
                 await asyncio.sleep(self.min_interval - gap)

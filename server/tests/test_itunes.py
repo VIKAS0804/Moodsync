@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -194,3 +196,22 @@ async def test_search_sends_song_scoped_query_params():
 
     assert seen["entity"] == "song"
     assert seen["media"] == "music"
+
+
+def test_throttle_survives_a_new_event_loop():
+    """The throttle must not bind itself to the first loop that touches it.
+
+    An asyncio.Lock created at import time binds to whichever loop first awaits
+    it, so a driver calling asyncio.run() per batch gets "bound to a different
+    event loop" on every later batch. That surfaced as 24-of-25 tracks
+    "failing" with nothing in the message about locks.
+    """
+    throttle = itunes_module._Throttle(min_interval=0.0)
+
+    async def use_it():
+        await throttle.wait()
+        await throttle.wait()
+
+    # Two separate asyncio.run calls == two separate event loops.
+    asyncio.run(use_it())
+    asyncio.run(use_it())
