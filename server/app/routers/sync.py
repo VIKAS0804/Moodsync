@@ -9,6 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import selection
 from app.clients.spotify import SpotifyClient, SpotifyError, SpotifyTrack
 from app.config import Settings
 from app.db import get_db
@@ -38,7 +39,7 @@ def _upsert_track(db: Session, item: SpotifyTrack) -> Track:
     return track
 
 
-async def _run_analysis(track_ids: list[str], settings: Settings) -> None:
+async def _run_analysis(track_ids: list[str], settings: Settings, user_id: str) -> None:
     """Background entrypoint. Never raises into the request path."""
     try:
         results = await pipeline.analyze_many(track_ids, settings)
@@ -46,6 +47,20 @@ async def _run_analysis(track_ids: list[str], settings: Settings) -> None:
         log.info("analysis batch complete: %d/%d scored", scored, len(results))
     except Exception:  # noqa: BLE001
         log.exception("background analysis batch failed")
+
+    # New scores mean a new distribution; without this the slider keeps mapping
+    # through the mean/sd from before the library was analysed.
+    from app.db import SessionLocal
+
+    session = SessionLocal()
+    try:
+        user = session.get(User, user_id)
+        if user is not None:
+            selection.refresh_score_stats(session, user)
+    except Exception:  # noqa: BLE001
+        log.exception("failed to refresh score stats after analysis")
+    finally:
+        session.close()
 
 
 @router.post("/sync", response_model=SyncResponse)
@@ -88,6 +103,8 @@ async def sync_library(
 
     user.last_synced_at = datetime.now(UTC)
     db.commit()
+    # Library changed, so the distribution the slider maps through changed too.
+    selection.refresh_score_stats(db, user)
 
     with_isrc = sum(1 for t in track_rows if t.isrc)
     scored_ids = set(
@@ -105,7 +122,7 @@ async def sync_library(
             log.warning("skipping analysis: no preview source available")
         else:
             queued = len(unscored)
-            background.add_task(_run_analysis, unscored, settings)
+            background.add_task(_run_analysis, unscored, settings, user.id)
 
     return SyncResponse(
         tracks_seen=len(seen),

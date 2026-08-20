@@ -63,6 +63,14 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Cached distribution of this user's own scored library, used to map a
+    # slider position onto their taste rather than onto the absolute scale.
+    # See app/selection.py for why this matters.
+    score_mean: Mapped[float | None] = mapped_column(Float)
+    score_stddev: Mapped[float | None] = mapped_column(Float)
+    score_count: Mapped[int] = mapped_column(Integer, default=0)
+    score_stats_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     library: Mapped[list[UserTrack]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )

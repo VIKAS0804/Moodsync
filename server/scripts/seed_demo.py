@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import delete, select  # noqa: E402
 
+from app import selection  # noqa: E402
 from app.clients.itunes import ITunesClient  # noqa: E402
 from app.db import SessionLocal, init_db  # noqa: E402
 from app.models import AppleCatalogMap, MoodScore, Track, User, UserTrack  # noqa: E402
@@ -187,6 +188,7 @@ def main() -> int:
                 db.add(UserTrack(user_id=user.id, track_id=track.id, source="demo"))
 
         db.commit()
+        selection.refresh_score_stats(db, user)
 
         print(f"Seeded {len(DEMO_TRACKS)} tracks ({created} new) for user {user.display_name}")
         print(f"\n  session token : {user.session_token}")

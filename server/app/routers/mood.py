@@ -24,13 +24,23 @@ def match_mood(
         default_factory=list,
         description="Spotify track ids to skip -- pass the last few so the slider doesn't repeat",
     ),
+    absolute: bool = Query(
+        False,
+        description=(
+            "Read the slider on the absolute 1-100 scale instead of as a "
+            "percentile of the caller's own library"
+        ),
+    ),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MoodMatchResponse:
     started = time.perf_counter()
 
-    candidates = selection.candidates_near(db, user.id, score, exclude=set(exclude))
-    chosen = selection.choose(candidates, score)
+    # A slider position means "this far up *my* library" unless told otherwise.
+    target, slider_mode = selection.resolve_target(user, score, absolute=absolute)
+
+    candidates = selection.candidates_near(db, user.id, target, exclude=set(exclude))
+    chosen = selection.choose(candidates, target)
     if chosen is None:
         raise HTTPException(
             status_code=404,
@@ -53,7 +63,11 @@ def match_mood(
             isrc=track.isrc,
         ),
         track_score=chosen.score,
-        distance=abs(chosen.score - score),
+        distance=abs(chosen.score - target),
+        slider_mode=slider_mode,
+        absolute_target=target,
+        library_mean=round(user.score_mean, 1) if user.score_mean is not None else None,
+        library_stddev=round(user.score_stddev, 1) if user.score_stddev is not None else None,
         confidence=chosen.confidence,
         model_version=chosen.model_version,
         # Always returned: the app needs it whenever App Remote isn't available.

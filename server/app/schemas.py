@@ -90,6 +90,14 @@ class MoodMatchResponse(BaseModel):
     playback_mode: str
     pool_size: int
     latency_ms: float
+    # "relative" = the slider was read as a percentile of this user's own
+    # library and mapped through their mean/sd; "absolute" = taken at face
+    # value (small library, or ?absolute=true).
+    slider_mode: str = "absolute"
+    # The absolute score actually searched for, after any mapping.
+    absolute_target: int = 0
+    library_mean: float | None = None
+    library_stddev: float | None = None
 
 
 class AnalysisStatusResponse(BaseModel):
