@@ -100,6 +100,14 @@ npx expo start        # then tap "Try the demo library"
                       # press w for browser, or scan the QR with Expo Go
 ```
 
+The app targets **SDK 54** deliberately: the App Store build of Expo Go is
+pinned to SDK 54, so a newer SDK gives "Project is incompatible with this
+version of Expo Go" on a phone with the latest Expo Go installed. Newer SDKs
+need a development build, and on iOS that means an Apple Developer membership.
+
+```bash
+```
+
 API docs are at `http://localhost:8000/docs`.
 
 ### Serving it to other devices on your network
