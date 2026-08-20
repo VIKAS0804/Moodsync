@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from app.clients.spotify import SpotifyClient, SpotifyError
 from app.config import Settings
 from app.db import get_db
-from app.deps import get_current_user, settings_dep
+from app.deps import get_current_user, settings_dep, spotify_access_token
 from app.models import MoodScore, User, UserTrack
 from app.schemas import AuthCallbackRequest, AuthSessionResponse, MeResponse
 
@@ -261,6 +261,47 @@ async def spotify_callback(
         code_verifier=payload.code_verifier,
         redirect_uri=payload.redirect_uri or settings.spotify_redirect_uri,
     )
+
+
+@router.get("/spotify/playback-token")
+async def spotify_playback_token(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(settings_dep),
+) -> dict[str, object]:
+    """Hand the client a short-lived Spotify access token for the Web Playback SDK.
+
+    This is a deliberate exception to "Spotify tokens never leave the server".
+    The Web Playback SDK runs in the browser and turns the page into a Spotify
+    playback device; it authenticates itself, so there is no way to keep the
+    token server-side and still get full-track playback with seeking. Everything
+    else -- library reads, sync, analysis -- continues to use the server copy.
+
+    Refreshed on demand, so the client gets a token that is valid now rather than
+    whatever was stored at login.
+    """
+    if not user.has_premium:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "The Spotify Web Playback SDK requires Premium. "
+                "Free accounts can still play 30-second previews."
+            ),
+        )
+
+    access_token = await spotify_access_token(user, db, settings)
+    expires_at = user.token_expires_at
+    expires_in = 3600
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        expires_in = max(0, int((expires_at - datetime.now(UTC)).total_seconds()))
+
+    return {
+        "access_token": access_token,
+        "expires_in": expires_in,
+        "product": user.product,
+    }
 
 
 @router.post("/logout", status_code=204)

@@ -117,8 +117,13 @@ export default function MoodScreen() {
         route={playback.route}
         isPlaying={playback.isPlaying}
         degradedReason={playback.degradedReason}
+        positionMs={playback.positionMs}
+        durationMs={playback.durationMs}
+        seekable={playback.seekable}
         onSkip={() => requestTrack(score)}
         onTogglePlay={() => (playback.isPlaying ? playback.pause() : playback.resume())}
+        onSeek={playback.seekTo}
+        onNudge={playback.nudge}
       />
     </ScrollView>
   );

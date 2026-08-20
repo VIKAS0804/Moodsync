@@ -1,10 +1,12 @@
 import { ActivityIndicator, Image, Pressable, Text, View } from 'react-native';
 
 import type { MoodMatch } from '@/api/types';
+import { TransportBar } from '@/components/TransportBar';
 import { moodColor } from '@/lib/mood';
 import type { PlaybackRoute } from '@/playback/usePlayback';
 
 const ROUTE_LABEL: Record<PlaybackRoute, string> = {
+  spotify_web: 'Full track',
   spotify_remote: 'Full track via Spotify',
   spotify_deep_link: 'Opened in Spotify',
   preview: '30s preview',
@@ -18,8 +20,13 @@ interface Props {
   route: PlaybackRoute;
   isPlaying: boolean;
   degradedReason: string | null;
+  positionMs: number;
+  durationMs: number;
+  seekable: boolean;
   onSkip: () => void;
   onTogglePlay: () => void;
+  onSeek: (positionMs: number) => void;
+  onNudge: (deltaMs: number) => void;
 }
 
 export function NowPlaying({
@@ -29,8 +36,13 @@ export function NowPlaying({
   route,
   isPlaying,
   degradedReason,
+  positionMs,
+  durationMs,
+  seekable,
   onSkip,
   onTogglePlay,
+  onSeek,
+  onNudge,
 }: Props) {
   if (loading && !match) {
     return (
@@ -98,25 +110,26 @@ export function NowPlaying({
         <Text className="mt-3 text-xs text-amber-400">{degradedReason}</Text>
       ) : null}
 
-      <View className="mt-4 flex-row gap-3">
-        <Pressable
-          onPress={onTogglePlay}
-          className="flex-1 items-center rounded-xl py-3 active:opacity-70"
-          style={{ backgroundColor: `${color}22`, borderColor: color, borderWidth: 1 }}
-          accessibilityRole="button"
-        >
-          <Text className="font-semibold" style={{ color }}>
-            {isPlaying ? 'Pause' : 'Play'}
-          </Text>
-        </Pressable>
-        <Pressable
-          onPress={onSkip}
-          className="flex-1 items-center rounded-xl border border-ink-600 bg-ink-700/60 py-3 active:opacity-70"
-          accessibilityRole="button"
-        >
-          <Text className="font-semibold text-slate-300">Another like this</Text>
-        </Pressable>
+      <View className="mt-3">
+        <TransportBar
+          positionMs={positionMs}
+          durationMs={durationMs}
+          isPlaying={isPlaying}
+          seekable={seekable}
+          colour={color}
+          onTogglePlay={onTogglePlay}
+          onSeek={onSeek}
+          onNudge={onNudge}
+        />
       </View>
+
+      <Pressable
+        onPress={onSkip}
+        className="mt-3 items-center rounded-xl border border-ink-600 bg-ink-700/60 py-3 active:opacity-70"
+        accessibilityRole="button"
+      >
+        <Text className="font-semibold text-slate-300">Another like this</Text>
+      </Pressable>
 
       <Text className="mt-3 text-center text-[10px] text-slate-600">
         {match.pool_size} scored tracks · {match.model_version} · {Math.round(match.latency_ms)}ms

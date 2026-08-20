@@ -245,18 +245,30 @@ error can't outrank a clean 180.
 
 ## Playback
 
-You cannot stream Spotify audio inside your own app. Three tiers, degrading
-gracefully:
+You cannot stream Spotify audio from your own audio stack — but you *can* host
+Spotify's player. Four tiers, best first:
 
-1. **App Remote SDK** — sends playback *commands* to the installed Spotify app. Needs
-   a native module and a custom dev client, so it's resolved at runtime and simply
-   reports unavailable in Expo Go.
-2. **Deep link** to `spotify:track:<id>` — works today with no native module, plays
-   the full track, hands the user to the Spotify UI.
-3. **30s Apple preview** via `expo-audio` — always available, because that clip was
-   already downloaded to score the track.
+| Route | Full track | Seek | Requires |
+|---|---|---|---|
+| **Web Playback SDK** | yes | **yes** | Web + Premium |
+| App Remote SDK | yes | yes | Custom dev client (native) |
+| `spotify:` deep link | yes | no — Spotify takes the screen | Spotify app installed |
+| 30s preview (`expo-audio`) | no | yes | nothing |
 
-The UI always says which one you're hearing rather than silently degrading.
+The Web Playback SDK is the only licensed route to full audio *we* control, so on
+web with Premium MoodSync is a real player: play/pause, a scrubbable progress bar,
+and ±10s. It turns the page into a Spotify playback device, which means it needs a
+Spotify access token in the browser — hence `GET /auth/spotify/playback-token`, a
+deliberate and documented exception to keeping tokens server-side. Everything else
+still uses the server's copy.
+
+A listener can also *choose*: **Auto / Full song / 30s**. Preview isn't only a
+fallback — it keeps playback inside MoodSync instead of handing the screen to
+Spotify, which is what you want while skimming for a mood.
+
+The UI always says which route you're hearing, and the transport controls are
+disabled rather than hidden when a route can't support them (deep link), so it's
+visible *that* seeking is unavailable.
 
 ## API
 
