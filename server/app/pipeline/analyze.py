@@ -13,11 +13,11 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.clients.apple_music import AppleMatch, AppleMusicClient
-from app.clients.itunes import ITunesClient
+from app.clients.itunes import ITunesClient, ITunesTransient
 from app.clients.storage import PreviewCache
 from app.config import Settings, get_settings
 from app.models import AnalysisJob, AppleCatalogMap, MoodScore, Track
@@ -32,7 +32,7 @@ class AnalysisResult:
     track_id: str
     title: str
     artist: str
-    status: str  # "scored" | "skipped" | "failed"
+    status: str  # "scored" | "skipped" | "deferred" | "failed"
     score: int | None = None
     match_method: str | None = None
     error: str | None = None
@@ -70,6 +70,9 @@ async def resolve_catalog_mapping(
             match = await apple.find_by_search(track.title, track.artist)
 
     if match is None and itunes is not None and settings.unmatched_track_policy == "fuzzy":
+        # A transient failure here must propagate, not be swallowed: writing a
+        # negative cache row for a rate-limited request turns a temporary outage
+        # into permanent "this track has no preview" data.
         found = await itunes.find(track.title, track.artist)
         if found is not None:
             match = AppleMatch(
@@ -124,7 +127,16 @@ async def analyze_track(
         db.commit()
 
     try:
-        mapping = await resolve_catalog_mapping(db, apple, track, settings, itunes)
+        try:
+            mapping = await resolve_catalog_mapping(db, apple, track, settings, itunes)
+        except ITunesTransient as exc:
+            # Retryable: leave the catalog alone so a later run can succeed.
+            db.rollback()
+            finish("deferred", str(exc)[:300])
+            return AnalysisResult(
+                track.id, track.title, track.artist, "deferred", error=str(exc)[:200]
+            )
+
         if mapping is None or not mapping.preview_url:
             finish("skipped", "no preview available from any catalog")
             return AnalysisResult(
@@ -172,11 +184,29 @@ async def analyze_track(
 
 
 def pending_tracks(db: Session, limit: int = 100, user_id: str | None = None) -> list[Track]:
-    """Tracks in the library that have no cached score yet."""
+    """Tracks that still have a chance of being scored.
+
+    "No score yet" is not the same as "worth trying". A track that no catalog
+    carries a preview for will never get a score, so selecting purely on a
+    missing `mood_scores` row makes those tracks permanently pending -- and any
+    loop that drains this list spins on them forever, re-doing the same lookups
+    and writing a job row each pass. The negative catalog row is the terminal
+    state, so exclude it here.
+    """
+    negative = (
+        select(AppleCatalogMap.isrc)
+        .where(AppleCatalogMap.match_method == "none")
+        .scalar_subquery()
+    )
     stmt = (
         select(Track)
         .outerjoin(MoodScore, MoodScore.track_id == Track.id)
         .where(MoodScore.track_id.is_(None))
+        .where(
+            # Keyed by ISRC where we have one, else by the synthetic spotify key
+            # resolve_catalog_mapping falls back to.
+            func.coalesce(Track.isrc, "spotify:" + Track.spotify_track_id).notin_(negative)
+        )
         .limit(limit)
     )
     if user_id:

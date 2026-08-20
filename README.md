@@ -67,7 +67,7 @@ server/        FastAPI backend + the mood-analysis pipeline
     models.py  SQLAlchemy ORM
     selection.py  slider position → track
   scripts/     phase1_pipeline.py · calibrate.py · seed_demo.py · rescore.py
-               dev_sync_schema.py
+               backfill.py · repair_catalog.py · dev_sync_schema.py
   tests/       60 tests
 app/           Expo mobile app
   app/         expo-router screens
@@ -353,6 +353,13 @@ track instead of searching near 95 and finding nothing.
   cover can slip through. They're confidence-discounted, which lowers their odds
   during selection, but that's a hedge, not a fix. Configure Apple Music for exact
   ISRC matching.
+- `/sync` runs analysis as a FastAPI background task, which dies with the
+  process — a uvicorn reload abandons the rest of the run. For a real library use
+  `python scripts/backfill.py`, which runs detached and resumes.
+- The iTunes Search API is unauthenticated and throttles hard. Requests are
+  spaced 3s apart, so a 1,700-track library takes ~80 minutes to analyse. Don't
+  lower that without watching for 403s: a throttled response looks exactly like
+  "no such track" unless you check the status.
 - There are no migrations. `create_all()` only creates missing *tables*, so after
   a model change run `python scripts/dev_sync_schema.py --apply` to add new
   columns to an existing database. It is additive-only — Alembic is the real

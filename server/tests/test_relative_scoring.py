@@ -118,3 +118,37 @@ def test_endpoint_absolute_query_param(client, db):
     ).json()
     assert body["slider_mode"] == "absolute"
     assert body["absolute_target"] == 95
+
+
+def test_unscoreable_tracks_leave_the_pending_queue(db):
+    """A track no catalog carries must reach a terminal state.
+
+    Selecting purely on "no mood_scores row" made these permanently pending, so
+    any loop draining the queue spin on them forever -- 244k job rows in one
+    real incident.
+    """
+    from app.models import AppleCatalogMap
+    from app.pipeline.analyze import pending_tracks
+
+    user = User(spotify_user_id="pend", product="free", session_token="pend-token")
+    db.add(user)
+    db.commit()
+
+    for i, isrc in enumerate(["HASPREVIEW01", "NOPREVIEW001"]):
+        track = Track(spotify_track_id=f"pend{i}", title=f"T{i}", artist="A", isrc=isrc)
+        db.add(track)
+        db.flush()
+        db.add(UserTrack(user_id=user.id, track_id=track.id))
+    # One genuinely absent from every catalog, one still worth trying.
+    db.add(AppleCatalogMap(isrc="NOPREVIEW001", preview_url=None, match_method="none"))
+    db.add(
+        AppleCatalogMap(
+            isrc="HASPREVIEW01", preview_url="https://x.test/a.m4a", match_method="fuzzy"
+        )
+    )
+    db.commit()
+
+    pending = pending_tracks(db, limit=50, user_id=user.id)
+    isrcs = {t.isrc for t in pending}
+    assert "HASPREVIEW01" in isrcs
+    assert "NOPREVIEW001" not in isrcs, "negative-cached tracks must not be retried forever"

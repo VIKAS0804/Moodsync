@@ -214,3 +214,47 @@ you read the body:
 
 `/sync` reports per-source counts so an empty result is diagnosable rather than
 just zero.
+
+
+---
+
+## 9. Transient failures must not be cached as answers
+
+**Decided: distinguish "the catalog says no" from "the catalog didn't answer".**
+
+Recorded because getting this wrong destroyed real data. The iTunes client
+swallowed every failure and returned `None`; `resolve_catalog_mapping` writes
+`None` as a permanent negative so the same lookup isn't repeated. Run that
+against a 1,777-track library and iTunes starts throttling: **1,657 tracks were
+written off as having no preview**, most of which had matched fine minutes
+earlier. The negative cache — the thing that makes the pipeline efficient — made
+the damage permanent.
+
+Three changes:
+
+1. `ITunesTransient` is raised for anything that isn't a real answer (timeouts,
+   403/429, 5xx, unparseable bodies). Only a `200` with no good match counts as
+   "not in the catalog" and gets cached.
+2. Requests are throttled to one per 3 seconds process-wide, with retry and
+   jittered backoff. The API is unauthenticated and undocumented; being polite
+   is the only option.
+3. Analysis reports `deferred` for a transient failure, leaving the catalog
+   untouched so a later run can succeed.
+
+The general lesson: a cache of negative results is only safe if "negative" and
+"failed" are different types. If a function returns the same value for both, the
+cache will eventually launder an outage into permanent data.
+
+## 10. Unscoreable tracks need a terminal state
+
+**Decided: the negative catalog row is terminal, and `pending_tracks` excludes it.**
+
+"Tracks with no score yet" and "tracks worth trying" are not the same set. A
+track no catalog carries will never get a score, so selecting purely on a missing
+`mood_scores` row leaves it pending forever. A loop draining that queue never
+finishes: an ad-hoc backfill re-processed the same rows ~97,000 times in 90
+seconds and wrote **244,000** `analysis_jobs` rows before being killed.
+
+`scripts/backfill.py` also stops when a batch makes no progress at all, on the
+principle that if nothing scored *and* nothing reached a terminal state, the
+problem is upstream and retrying harder won't fix it.

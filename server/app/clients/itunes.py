@@ -17,8 +17,11 @@ Use this as a fallback tier when Apple Music isn't configured.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,6 +31,41 @@ log = logging.getLogger(__name__)
 
 SEARCH_URL = "https://itunes.apple.com/search"
 LOOKUP_URL = "https://itunes.apple.com/lookup"
+
+# iTunes Search is unauthenticated and undocumented on limits; ~20 requests per
+# minute is the commonly cited ceiling. Going faster gets you throttled, and a
+# throttled response is indistinguishable from "no such track" unless you look
+# at the status -- which is how a whole library once got cached as unmatchable.
+MIN_INTERVAL_SECONDS = 3.0
+MAX_ATTEMPTS = 3
+
+
+class ITunesTransient(RuntimeError):
+    """A failure that says nothing about whether the track exists.
+
+    Throttling, timeouts and 5xx must never be recorded as "no preview": that
+    turns a rate limit into permanent bad data. Callers should retry later and
+    leave the catalog untouched.
+    """
+
+
+class _Throttle:
+    """Process-wide minimum spacing between requests to a public API."""
+
+    def __init__(self, min_interval: float):
+        self.min_interval = min_interval
+        self._lock = asyncio.Lock()
+        self._last = 0.0
+
+    async def wait(self) -> None:
+        async with self._lock:
+            gap = time.monotonic() - self._last
+            if gap < self.min_interval:
+                await asyncio.sleep(self.min_interval - gap)
+            self._last = time.monotonic()
+
+
+_throttle = _Throttle(MIN_INTERVAL_SECONDS)
 
 # Strip parenthetical noise ("(Remastered 2011)", "- Radio Edit") that pushes
 # the text search toward the wrong recording.
@@ -111,31 +149,66 @@ class ITunesClient:
         # wrong sound, which is exactly the failure mode that corrupts scoring.
         return 0.4 * title_overlap + 0.6 * artist_overlap
 
+    async def _search(self, term: str, limit: int) -> list[dict[str, Any]]:
+        """Throttled, retrying search.
+
+        Raises `ITunesTransient` when the failure carries no information about
+        whether the track exists, so callers don't cache a rate limit as a miss.
+        """
+        last_error: str = "unknown"
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            await _throttle.wait()
+            try:
+                resp = await self.client.get(
+                    SEARCH_URL,
+                    params={
+                        "term": term,
+                        "media": "music",
+                        "entity": "song",
+                        "limit": limit,
+                        "country": self.storefront,
+                    },
+                )
+            except httpx.HTTPError as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+            else:
+                if resp.status_code == 200:
+                    try:
+                        # iTunes serves JSON as text/javascript; don't trust the
+                        # content type, just parse it.
+                        return resp.json().get("results", [])
+                    except ValueError as exc:
+                        last_error = f"unparseable body: {exc}"
+                elif resp.status_code in (403, 429) or resp.status_code >= 500:
+                    last_error = f"HTTP {resp.status_code}"
+                else:
+                    # A genuine client error won't fix itself on retry.
+                    raise ITunesTransient(f"iTunes HTTP {resp.status_code} for {term!r}")
+
+            if attempt < MAX_ATTEMPTS:
+                backoff = MIN_INTERVAL_SECONDS * (2 ** (attempt - 1))
+                backoff += random.uniform(0, 1.0)  # de-sync concurrent workers
+                log.warning(
+                    "iTunes %s for %r; retry %d/%d in %.1fs",
+                    last_error, term, attempt, MAX_ATTEMPTS, backoff,
+                )
+                await asyncio.sleep(backoff)
+
+        raise ITunesTransient(f"iTunes unavailable after {MAX_ATTEMPTS} attempts: {last_error}")
+
     async def find(
         self, title: str, artist: str, limit: int = 10, min_score: float = 0.5
     ) -> ITunesMatch | None:
-        """Best text match that actually has preview audio."""
+        """Best text match that actually has preview audio.
+
+        Returns None only when iTunes answered and had nothing good enough.
+        Raises `ITunesTransient` if iTunes didn't really answer.
+        """
         term = f"{_normalise(title)} {_normalise(artist)}".strip()
         if not term:
             return None
 
-        try:
-            resp = await self.client.get(
-                SEARCH_URL,
-                params={
-                    "term": term,
-                    "media": "music",
-                    "entity": "song",
-                    "limit": limit,
-                    "country": self.storefront,
-                },
-            )
-            resp.raise_for_status()
-            # iTunes serves JSON as text/javascript, so don't trust the content type.
-            results = resp.json().get("results", [])
-        except (httpx.HTTPError, ValueError) as exc:
-            log.warning("iTunes search failed for %r: %s", term, exc)
-            return None
+        results = await self._search(term, limit)
 
         best: tuple[float, dict[str, Any]] | None = None
         for song in results:
