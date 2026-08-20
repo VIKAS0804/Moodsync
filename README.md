@@ -100,6 +100,28 @@ npx expo start        # then tap "Try the demo library"
 
 API docs are at `http://localhost:8000/docs`.
 
+### Serving it to other devices on your network
+
+uvicorn binds `127.0.0.1` by default, which only accepts connections from the
+same machine. To let a phone (or a friend's laptop) on the same WiFi reach it:
+
+```bash
+.venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Then it's at `http://<your-lan-ip>:8000` — `ipconfig getifaddr en0` on macOS.
+The mobile app derives that address from the Expo connection automatically;
+override with `EXPO_PUBLIC_API_URL` if needed.
+
+Two caveats. `0.0.0.0` exposes the API to everyone on the network, session
+tokens are bearer tokens over plain HTTP, and `demo-session-token` is a
+published constant — fine on home WiFi, not on café or campus networks. And the
+browser login won't work from another machine: Spotify only accepts HTTPS
+redirect URIs or loopback *IP literals*, so `http://<lan-ip>:8000/...` is
+rejected while `127.0.0.1` resolves to whichever machine opened the browser.
+Use an HTTPS tunnel (cloudflared, ngrok) and register that URL if you need
+remote sign-in.
+
 ### With real credentials
 
 Fill in `server/.env`:
