@@ -66,6 +66,7 @@ server/        FastAPI backend + the mood-analysis pipeline
     models.py  SQLAlchemy ORM
     selection.py  slider position → track
   scripts/     phase1_pipeline.py · calibrate.py · seed_demo.py · rescore.py
+               dev_sync_schema.py
   tests/       60 tests
 app/           Expo mobile app
   app/         expo-router screens
@@ -304,6 +305,10 @@ real audio, not synthetic signals.
   cover can slip through. They're confidence-discounted, which lowers their odds
   during selection, but that's a hedge, not a fix. Configure Apple Music for exact
   ISRC matching.
+- There are no migrations. `create_all()` only creates missing *tables*, so after
+  a model change run `python scripts/dev_sync_schema.py --apply` to add new
+  columns to an existing database. It is additive-only — Alembic is the real
+  answer once the schema settles.
 - OAuth tokens are stored in plaintext in `users`. They need envelope encryption
   (KMS) before this goes near real users.
 - Session auth is an opaque bearer token, deliberately simple. It is not a
