@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.clients.apple_music import AppleMatch, AppleMusicClient
+from app.clients.itunes import ITunesClient
 from app.clients.storage import PreviewCache
 from app.config import Settings, get_settings
 from app.models import AnalysisJob, AppleCatalogMap, MoodScore, Track
@@ -41,20 +43,43 @@ def _utcnow() -> datetime:
 
 
 async def resolve_catalog_mapping(
-    db: Session, apple: AppleMusicClient, track: Track, settings: Settings
+    db: Session,
+    apple: AppleMusicClient | None,
+    track: Track,
+    settings: Settings,
+    itunes: ITunesClient | None = None,
 ) -> AppleCatalogMap | None:
-    """Find (and cache) the Apple Music row for a track. One lookup per ISRC, ever."""
+    """Find (and cache) the preview source for a track. One lookup per ISRC, ever.
+
+    Tiers, best first:
+      1. Apple Music catalog by ISRC -- exact, same recording, needs a token.
+      2. Apple Music text search -- fuzzy, still needs a token.
+      3. iTunes Search -- fuzzy, needs no credentials at all, so the pipeline
+         works for anyone who cloned the repo without an Apple developer account.
+    """
     if track.isrc:
         cached = db.get(AppleCatalogMap, track.isrc)
         if cached is not None:
             return cached if cached.preview_url else None
 
     match: AppleMatch | None = None
-    if track.isrc:
-        match = await apple.find_by_isrc(track.isrc)
+    if apple is not None and settings.use_apple_music:
+        if track.isrc:
+            match = await apple.find_by_isrc(track.isrc)
+        if match is None and settings.unmatched_track_policy == "fuzzy":
+            match = await apple.find_by_search(track.title, track.artist)
 
-    if match is None and settings.unmatched_track_policy == "fuzzy":
-        match = await apple.find_by_search(track.title, track.artist)
+    if match is None and itunes is not None and settings.unmatched_track_policy == "fuzzy":
+        found = await itunes.find(track.title, track.artist)
+        if found is not None:
+            match = AppleMatch(
+                apple_catalog_id=found.apple_catalog_id,
+                preview_url=found.preview_url,
+                title=found.title,
+                artist=found.artist,
+                isrc=None,  # iTunes Search does not expose ISRC
+                match_method="fuzzy",
+            )
 
     key = track.isrc or f"spotify:{track.spotify_track_id}"
     row = db.get(AppleCatalogMap, key)
@@ -82,9 +107,10 @@ async def resolve_catalog_mapping(
 async def analyze_track(
     db: Session,
     track: Track,
-    apple: AppleMusicClient,
+    apple: AppleMusicClient | None,
     cache: PreviewCache,
     settings: Settings | None = None,
+    itunes: ITunesClient | None = None,
 ) -> AnalysisResult:
     settings = settings or get_settings()
     job = AnalysisJob(track_id=track.id, status="running")
@@ -98,9 +124,9 @@ async def analyze_track(
         db.commit()
 
     try:
-        mapping = await resolve_catalog_mapping(db, apple, track, settings)
+        mapping = await resolve_catalog_mapping(db, apple, track, settings, itunes)
         if mapping is None or not mapping.preview_url:
-            finish("skipped", "no Apple Music preview available")
+            finish("skipped", "no preview available from any catalog")
             return AnalysisResult(
                 track.id, track.title, track.artist, "skipped", error="no preview available"
             )
@@ -108,7 +134,10 @@ async def analyze_track(
         cache_key = track.isrc or track.spotify_track_id
         audio = cache.get(cache_key)
         if audio is None:
-            audio = await apple.download_preview(mapping.preview_url)
+            downloader = apple or itunes
+            if downloader is None:
+                raise RuntimeError("no catalog client available to fetch the preview")
+            audio = await downloader.download_preview(mapping.preview_url)
             cache.put(cache_key, audio)
 
         path = cache.local_path(cache_key, audio)
@@ -177,7 +206,20 @@ async def analyze_many(
     cache = PreviewCache(settings)
     semaphore = asyncio.Semaphore(max(1, settings.analysis_concurrency))
 
-    async with AppleMusicClient(settings) as apple:
+    async with AsyncExitStack() as stack:
+        apple = (
+            await stack.enter_async_context(AppleMusicClient(settings))
+            if settings.use_apple_music
+            else None
+        )
+        itunes = (
+            await stack.enter_async_context(ITunesClient(storefront=settings.apple_storefront))
+            if settings.use_itunes_fallback
+            else None
+        )
+        if apple is None and itunes is None:
+            log.warning("no preview source configured; nothing to analyse")
+            return []
 
         async def run(track_id: str) -> AnalysisResult:
             async with semaphore:
@@ -186,7 +228,7 @@ async def analyze_many(
                     track = session.get(Track, track_id)
                     if track is None:
                         return AnalysisResult(track_id, "", "", "failed", error="track not found")
-                    return await analyze_track(session, track, apple, cache, settings)
+                    return await analyze_track(session, track, apple, cache, settings, itunes)
                 finally:
                     session.close()
 

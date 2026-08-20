@@ -12,6 +12,7 @@ class HealthResponse(BaseModel):
     environment: str
     database: str
     apple_music_configured: bool
+    preview_source: str
     spotify_configured: bool
     preview_cache: str
 

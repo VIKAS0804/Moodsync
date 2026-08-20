@@ -7,32 +7,79 @@ initial build. Each is reversible; the reasoning matters more than the choice.
 
 ## 1. Mood scoring: heuristic vs. trained model
 
-**Decided: a formalised heuristic, structured so a model can replace it.**
+**Decided: a calibrated heuristic for now, structured so a model can replace it.**
 
-A trained regression is the stronger story, but only with labels. There is no labelled
-dataset yet, so a model would be fitting noise and it would be impossible to tell a
-scoring bug from a data problem.
+> **Correction (2026-08-20).** The original version of this entry justified the
+> heuristic by claiming "there is no labelled dataset yet, so a model would be fitting
+> noise." **That was wrong.** The historical Spotify audio-features data still exists
+> in public datasets (~114k tracks with danceability/energy/valence on Kaggle and
+> HuggingFace). The endpoint is dead; the data isn't. A model can be trained on those
+> labels and applied to our own library, which is what a comparable project
+> ([VibeScape](https://github.com/chandankeelara/VibeScape)) does by fine-tuning
+> MERT-v1-95M with a regression head. The honest reason we still ship a heuristic is
+> **scope**, not the absence of labels.
 
 What makes this more than "some hardcoded numbers":
 
-- Every feature is normalised against **documented anchors** (`FeatureAnchor` in
-  `scoring.py`) rather than magic constants scattered through the code.
+- Every feature is normalised against **anchors measured from real audio**
+  (`FeatureAnchor` in `scoring.py`), set to the p5/p95 of that feature over a real
+  preview set rather than guessed.
 - Weights are declared in one table and renormalised when a feature is missing, so a
   failed extraction doesn't silently drag a track toward "calm".
+- The model is **evaluated**, not asserted: `scripts/calibrate.py` reports Spearman
+  rank correlation against hand-labelled energy tiers. v1 scored +0.53, v2 scores
+  +0.82.
 - `explain()` returns per-feature contributions, so any score can be interrogated.
 - The **feature vector is persisted** alongside the score. Swapping in a trained model
   means replacing one function and running `scripts/rescore.py` — a pure database
   pass over cached vectors, no audio re-downloaded, no DSP re-run.
 
-**Revisit when:** ~100 self-labelled tracks exist. Then fit a regression on the stored
-vectors and compare against the heuristic on a held-out split.
+**Revisit when:** there's appetite to add a training pipeline. Fit a regression on a
+public audio-features dataset, group-split by artist to avoid leakage, and compare
+against the heuristic on a held-out split.
+
+### What calibration changed (v1 → v2)
+
+The v1 anchors were guessed and sanity-checked on *synthesised* tones, which turned out
+to prove nothing: synthetic WAVs decode through a different path than real AAC previews
+and look nothing like commercially mastered audio. Measured against real clips, every
+v1 anchor sat outside the real range — `rms_mean` topped out at 0.18 when real masters
+reach 0.32, so every loud track pinned to 1.0 and the model could not tell pop from
+metal (tier means 59.7 / 55.5 / 55.3).
+
+The largest single fix was **removing tempo**, which had the heaviest weight (0.30) and
+turned out to be uncorrelated with energy on 30-second previews. Dropping it moved ρ
+from +0.53 to +0.73; re-anchoring and adding `spectral_flatness` took it to +0.82.
+
+Lesson worth keeping: a DSP model can only be validated against real audio. The
+synthetic test suite stayed green through both of the bugs that made the pipeline
+useless in practice.
 
 ---
 
-## 2. Unmatched ISRCs
+## 2. Unmatched ISRCs, and where previews come from
 
 **Decided: fuzzy fallback, recorded and confidence-discounted.** Configurable via
-`UNMATCHED_TRACK_POLICY=fuzzy|exclude`.
+`UNMATCHED_TRACK_POLICY=fuzzy|exclude` and `PREVIEW_SOURCE=auto|apple_music|itunes`.
+
+There are three tiers, best first:
+
+1. **Apple Music Catalog by ISRC** — exact; you know you analysed the same recording
+   the user owns. Needs an Apple Developer account and an ES256 developer token.
+2. **Apple Music text search** — fuzzy, still needs the token.
+3. **iTunes Search API** — fuzzy, and needs *no credentials whatsoever*.
+
+Tier 3 was added after seeing it in VibeScape, and it matters more than it sounds:
+without it, nobody can run this project's core pipeline without an Apple Developer
+account. With it, `git clone && pip install` is enough to score real music.
+
+One trap worth recording, since it's easy to get wrong in both directions:
+`itunes.apple.com/lookup?isrc=...` **does not work**. ISRC is not a supported `lookup`
+parameter (`id`, `upc`, `isbn`, `amgArtistId` are). It doesn't error — it returns
+`resultCount: 0`, so code that "looks up by ISRC" there silently matches nothing and
+falls through to text search forever. Verified against real ISRCs from MusicBrainz.
+Exact ISRC matching needs the real Apple Music Catalog API (`filter[isrc]`). So every
+`ITunesClient` match is marked `fuzzy`, never `isrc`.
 
 Excluding unmatched tracks silently shrinks the pool, and the user has no way to
 understand why a song they own never plays. Instead:

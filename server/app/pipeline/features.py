@@ -4,9 +4,11 @@ This replaces Spotify's retired `audio-features` endpoint. Everything here is
 computed locally with librosa; nothing is fetched from a "give me the energy of
 this song" API, because no such API is available to new third-party apps.
 
-Apple previews are AAC in an MP4 container. libsndfile can't decode AAC, so
-`load_audio` walks a decoder chain: soundfile -> audioread (CoreAudio on macOS)
--> ffmpeg. Docker images should install ffmpeg.
+Every real preview is AAC in an MP4 container, which libsndfile cannot decode,
+so ffmpeg is a hard requirement rather than an optimisation -- without it this
+module cannot process a single real track. `imageio-ffmpeg` ships a binary as a
+pip dependency, so `pip install` alone is enough on any platform; a system
+ffmpeg on PATH is used first if present.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import logging
 import shutil
 import subprocess
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +28,10 @@ log = logging.getLogger(__name__)
 SAMPLE_RATE = 22_050
 FEATURE_VERSION = "features-v1"
 
-# An onset must be this many times stronger than the clip's mean RMS to count.
-# See `_onset_rate` for why this gate exists.
-ONSET_STRENGTH_FLOOR = 20.0
+# Minimum absolute spectral-flux strength for a peak to count as an onset.
+# Ambient/drone material peaks around 1.4; ordinary music runs 7-25.
+# See `_onset_rate` for why this is absolute rather than RMS-relative.
+ONSET_STRENGTH_FLOOR = 2.0
 
 # Krumhansl-Schmuckler key profiles, used as a cheap major/minor (valence) proxy.
 MAJOR_PROFILE = np.array(
@@ -40,6 +44,20 @@ MINOR_PROFILE = np.array(
 
 class AudioDecodeError(RuntimeError):
     pass
+
+
+@lru_cache(maxsize=1)
+def ffmpeg_path() -> str | None:
+    """Locate an ffmpeg binary: system PATH first, then the pip-installed one."""
+    system = shutil.which("ffmpeg")
+    if system:
+        return system
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001 - absence is reported by the caller
+        return None
 
 
 def load_audio(path: str | Path, sr: int = SAMPLE_RATE) -> tuple[np.ndarray, int]:
@@ -55,10 +73,11 @@ def load_audio(path: str | Path, sr: int = SAMPLE_RATE) -> tuple[np.ndarray, int
     except Exception as exc:  # noqa: BLE001 - any decoder failure falls through to ffmpeg
         log.debug("librosa could not decode %s directly (%s); trying ffmpeg", path.name, exc)
 
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = ffmpeg_path()
     if not ffmpeg:
         raise AudioDecodeError(
-            f"could not decode {path.name}; install ffmpeg to handle AAC/m4a previews"
+            f"could not decode {path.name}: no ffmpeg available. Install the "
+            "`imageio-ffmpeg` package or put ffmpeg on PATH."
         )
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
         result = subprocess.run(
@@ -96,18 +115,24 @@ def _tonal_valence(chroma: np.ndarray) -> float:
 
 
 def _onset_rate(y: np.ndarray, sr: int, rms_mean: float, duration: float) -> float:
-    """Onsets per second, counting only genuine transients.
+    """Onsets per second, counting only audible transients.
 
     librosa's onset detector normalises internally, so it is scale-invariant: on
-    a near-silent ambient track it happily reports a high onset rate from
-    inaudible spectral wobble, which would push exactly the calmest tracks up
-    the slider. Spectral flux scales with amplitude and so does RMS, so gating
-    peaks on `flux >= k * rms` is amplitude-invariant and asks the right
-    question -- "is this transient loud relative to the track itself?"
+    an ambient track it reports a high onset rate from inaudible spectral
+    wobble, which would push exactly the calmest tracks up the slider. So peaks
+    are gated on onset *strength*.
 
-    k was tuned on synthetic signals (a drone peaks at ~9x its RMS, a
-    percussive loop at ~270x); revisit it once there's a labelled set of real
-    clips to check against.
+    The gate is an absolute floor on flux, not a multiple of the track's RMS.
+    An RMS-relative gate was tried first and is actively wrong on real music:
+    loud compressed masters have a low crest factor, so their flux-to-RMS ratio
+    is *lower* than a sparse acoustic recording's. Measured over real previews
+    that ratio ran 12x (Skrillex) to 299x (Metallica), i.e. inversely related to
+    energy -- a relative gate silently discards the transients of the loudest,
+    most energetic tracks.
+
+    Absolute flux separates cleanly instead: genuine ambient peaks around 1.4
+    while ordinary music runs 7-25. Validated on 8 real clips; worth re-checking
+    against a larger labelled set.
     """
     import librosa
 
@@ -119,9 +144,9 @@ def _onset_rate(y: np.ndarray, sr: int, rms_mean: float, duration: float) -> flo
         return 0.0
 
     frames = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr, units="frames")
-    if rms_mean > 0:
-        floor = ONSET_STRENGTH_FLOOR * rms_mean
-        frames = [f for f in frames if f < onset_env.size and onset_env[f] >= floor]
+    frames = [
+        f for f in frames if f < onset_env.size and onset_env[f] >= ONSET_STRENGTH_FLOOR
+    ]
     return float(len(frames)) / duration
 
 

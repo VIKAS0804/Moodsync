@@ -16,6 +16,9 @@ dependencies = [
     "librosa>=0.10.2",
     "numpy>=1.26",
     "soundfile>=0.12",
+    # Ships an ffmpeg binary. Mandatory, not optional: every real preview is AAC
+    # and libsndfile cannot decode it, so without ffmpeg the pipeline is dead.
+    "imageio-ffmpeg>=0.5",
     "python-multipart>=0.0.12",
 ]
 

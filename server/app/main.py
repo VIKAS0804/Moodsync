@@ -69,6 +69,14 @@ def health(settings: Settings = Depends(settings_dep)) -> HealthResponse:
         environment=settings.environment,
         database=database,
         apple_music_configured=settings.apple_music_configured,
+        # Which catalog previews will actually come from, given current config.
+        preview_source=(
+            "apple_music"
+            if settings.use_apple_music
+            else "itunes"
+            if settings.use_itunes_fallback
+            else "none"
+        ),
         spotify_configured=bool(settings.spotify_client_id),
         preview_cache=PreviewCache(settings).backend,
     )

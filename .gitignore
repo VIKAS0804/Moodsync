@@ -44,3 +44,6 @@ previews/
 
 # --- Local tooling ---
 .claude/settings.local.json
+
+# --- Generated reports ---
+calibration_report.json

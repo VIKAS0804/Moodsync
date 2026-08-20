@@ -101,8 +101,8 @@ async def sync_library(
 
     queued = 0
     if payload.analyze and unscored:
-        if not settings.apple_music_configured:
-            log.warning("skipping analysis: Apple Music credentials are not configured")
+        if not settings.analysis_available:
+            log.warning("skipping analysis: no preview source available")
         else:
             queued = len(unscored)
             background.add_task(_run_analysis, unscored, settings)

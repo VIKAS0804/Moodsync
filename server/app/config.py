@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     analysis_concurrency: int = 4
     # Tracks with no ISRC match on Apple Music: "exclude" or "fuzzy"
     unmatched_track_policy: str = "fuzzy"
+    # Where preview clips come from:
+    #   auto        - Apple Music catalog if configured, else iTunes Search
+    #   apple_music - exact ISRC matching only (needs a developer token)
+    #   itunes      - credential-free text search only
+    preview_source: str = "auto"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -54,6 +59,24 @@ class Settings(BaseSettings):
     @property
     def s3_configured(self) -> bool:
         return bool(self.s3_preview_bucket)
+
+    @property
+    def use_apple_music(self) -> bool:
+        """Exact ISRC matching, when a developer token is available."""
+        if self.preview_source == "itunes":
+            return False
+        return self.apple_music_configured
+
+    @property
+    def use_itunes_fallback(self) -> bool:
+        """Credential-free previews. The pipeline can run with no Apple account."""
+        if self.preview_source == "apple_music":
+            return False
+        return self.preview_source == "itunes" or not self.apple_music_configured
+
+    @property
+    def analysis_available(self) -> bool:
+        return self.use_apple_music or self.use_itunes_fallback
 
 
 @lru_cache

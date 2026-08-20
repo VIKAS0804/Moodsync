@@ -25,7 +25,8 @@ So the core of this project is a **mood-scoring pipeline built from scratch**:
 |---|---|
 | No audio features from Spotify | Apple Music's Catalog API still serves 30-second preview clips with only a *developer* token — no user subscription needed |
 | Linking the two catalogs | Spotify still exposes **ISRC** on the standard track object; Apple's catalog is queryable by `filter[isrc]` |
-| Deriving mood | Local DSP feature extraction (librosa) → a documented weighted model → a 1–100 score |
+| No Apple developer account | Falls back to the public **iTunes Search API**, which needs no credentials at all. Text-matched rather than ISRC-exact, so those matches are confidence-discounted |
+| Deriving mood | Local DSP feature extraction (librosa) → a weighted model calibrated against real audio → a 1–100 score |
 | Cost of recomputing | Scores **and their feature vectors** are cached in PostgreSQL |
 | Can't stream Spotify audio in-app | Licensing, not a technical gap. Playback is handed off to the Spotify app, with a preview fallback |
 
@@ -59,13 +60,13 @@ So the core of this project is a **mood-scoring pipeline built from scratch**:
 ```
 server/        FastAPI backend + the mood-analysis pipeline
   app/
-    clients/   spotify.py · apple_music.py · storage.py (S3)
+    clients/   spotify.py · apple_music.py · itunes.py · storage.py (S3)
     pipeline/  features.py (DSP) · scoring.py (model) · analyze.py
     routers/   auth.py · sync.py · mood.py
     models.py  SQLAlchemy ORM
     selection.py  slider position → track
-  scripts/     phase1_pipeline.py · seed_demo.py · rescore.py
-  tests/       39 tests
+  scripts/     phase1_pipeline.py · calibrate.py · seed_demo.py · rescore.py
+  tests/       52 tests
 app/           Expo mobile app
   app/         expo-router screens
   src/         api · auth · components · playback · lib
@@ -106,8 +107,12 @@ Fill in `server/.env`:
 - **Spotify** — [developer dashboard](https://developer.spotify.com/dashboard), add
   redirect URI `moodsync://callback`. The app is a public client using PKCE, so the
   client secret is optional and server-side only.
-- **Apple Music** — Apple Developer → Keys → enable MusicKit, download the `.p8` once.
-  Only a *developer* token is needed; no Apple Music subscription, no user token.
+- **Apple Music** *(optional)* — Apple Developer → Keys → enable MusicKit, download
+  the `.p8` once. Only a *developer* token is needed; no Apple Music subscription, no
+  user token. **Without it the pipeline still runs**, falling back to the
+  credential-free iTunes Search API; set `PREVIEW_SOURCE` to pin one or the other.
+  Apple Music buys you exact ISRC matching, i.e. certainty you analysed the same
+  recording the user owns.
 
 Then sign in with Spotify in the app and hit **Sync library**.
 
@@ -137,21 +142,52 @@ in for Spotify's `valence`.
 ### Scoring
 
 A **formalised heuristic**, not a black box. Each feature is squashed to 0–1 against
-documented anchors, then combined with named weights:
+anchors set to the p5/p95 of that feature *measured over real preview clips*, then
+combined with named weights:
 
 | Feature | Anchors (0 → 1) | Weight |
 |---|---|---|
-| `tempo_bpm` | 60 → 180 | 0.30 |
-| `rms_mean` | 0.010 → 0.180 | 0.22 |
-| `onset_rate_hz` | 0.5 → 7.0 | 0.18 |
-| `spectral_centroid_hz` | 800 → 4500 | 0.15 |
-| `percussive_ratio` | 0.15 → 0.70 | 0.10 |
-| `tonal_valence` | 0 → 1 | 0.05 |
+| `rms_mean` | 0.0595 → 0.3185 | 0.22 |
+| `onset_rate_hz` | 0.401 → 4.557 | 0.20 |
+| `spectral_flatness` | 0.0 → 0.064 | 0.18 |
+| `spectral_centroid_hz` | 509 → 3100 | 0.16 |
+| `percussive_ratio` | 0.0278 → 0.4680 | 0.12 |
+| `zero_crossing_rate` | 0.0321 → 0.1476 | 0.12 |
 
-Two reasons it's a heuristic rather than a trained model: there's no labelled dataset
-yet, so a regression would be fitting noise; and the weights being *data* means
-swapping in a trained model later only replaces `score_features`, keeping the same
-feature vector and the same cached rows.
+**Tempo is deliberately absent.** Beat tracking on 30-second previews is unreliable
+enough to be actively harmful — calibration put Clair de Lune at 172 BPM and Killing
+in the Name at 83, and mean detected tempo per energy tier came out 116/105/131/119/118,
+i.e. uncorrelated with energy. It previously carried the *largest* weight. It's still
+extracted and persisted; it's just not trusted by the scorer.
+
+`spectral_flatness` (noisiness — distorted guitars, cymbals, noise-heavy EDM) is what
+separates aggressive tracks from merely loud ones.
+
+The weights being *data* means swapping in a trained model later only replaces
+`score_features`, keeping the same feature vector and the same cached rows.
+
+### Calibration
+
+`scripts/calibrate.py` fetches 30 real previews (no credentials needed), extracts
+features, and scores the model by Spearman rank correlation against five hand-labelled
+energy tiers:
+
+```bash
+.venv/bin/python scripts/calibrate.py            # fetch + report
+.venv/bin/python scripts/calibrate.py --no-fetch # reuse cached clips
+```
+
+| Model | ρ (tier vs score) | Tier mean scores 1→5 |
+|---|---|---|
+| v1 — guessed anchors, tempo-weighted | +0.53 | 28.0 · 40.8 · 59.7 · 55.5 · 55.3 |
+| **v2 — calibrated, no tempo** | **+0.82** | 8.2 · 34.2 · 61.0 · 69.0 · 70.2 |
+
+v1 couldn't order the top three tiers at all. v2 wins on 399 of 400 random half-splits,
+and leave-one-out ρ stays within 0.802–0.858, so the gain isn't one lucky track.
+
+**Honest limits:** 29 tracks, tiers labelled by hand, and tiers 4/5 remain nearly tied
+(69.0 vs 70.2) — loudness-war mastering leaves a pop master and a metal master with
+similar RMS. Treat this as "clearly better than v1", not as validated accuracy.
 
 Because `mood_scores.feature_vector` is persisted, **re-scoring is a pure database
 pass** — no audio is re-downloaded and no DSP re-runs:
@@ -198,19 +234,27 @@ time you landed on 72, which reads as broken.
 ## Tests
 
 ```bash
-cd server && .venv/bin/python -m pytest -q     # 39 passed
+cd server && .venv/bin/python -m pytest -q     # 52 passed
 cd app && npm run typecheck
 ```
 
-The DSP tests synthesize audio rather than hitting any API: a quiet drone and a
-170 BPM percussive loop must land on opposite ends of the slider (they score **5** and
-**62**).
+The DSP tests synthesize audio rather than hitting any API, so they run offline. That
+is also their limitation, and it hid two real bugs that only appeared on real music:
 
-That test caught a real bug. librosa's onset detector normalises internally, so it's
-scale-invariant — on a near-silent ambient clip it reported *more* onsets (93) than a
-loud percussive one (56), which would have pushed exactly the calmest tracks up the
-slider. Onsets are now gated on strength relative to the clip's own RMS; see
-`_onset_rate` in `server/app/pipeline/features.py`.
+**1. The pipeline couldn't decode a single real track.** Every Apple/iTunes preview is
+AAC, libsndfile can't decode AAC, and the synthetic tests used WAV — which decodes
+through a completely different path. All 8 real previews failed with `AudioDecodeError`
+while 39 tests stayed green. ffmpeg is now a hard dependency (`imageio-ffmpeg` ships a
+binary via pip, so no system install is needed).
+
+**2. The onset gate was backwards on real music.** Onsets were gated at `20 × rms`.
+On real masters that ratio runs 12× (Skrillex) to 299× (Metallica) — *inversely*
+related to energy, because loud compressed music has a low crest factor. The gate was
+discarding the transients of the most energetic tracks: Skrillex came back with 0.03
+onsets/sec. It's now an absolute flux floor (ambient peaks ~1.4, real music 7–25).
+
+Both are why `scripts/calibrate.py` exists: correctness here has to be measured against
+real audio, not synthetic signals.
 
 ## Status
 
@@ -220,18 +264,25 @@ slider. Onsets are now gated on strength relative to the clip's own RMS; see
 - [x] **Phase 4** — Spotify OAuth + playback handoff (deep link; App Remote SDK needs a dev client)
 - [x] **Phase 5** — preview fallback, error/loading states, background sync
 - [ ] Measure real ISRC match rate over a full library
-- [ ] Label ~100 tracks and fit a regression to replace the heuristic
+- [ ] Library-relative (z-scored) scores, so the whole slider is usable regardless
+      of a user's taste
+- [ ] Promote valence to a second axis (calm/tense as well as calm/hyper)
+- [ ] Train a regression on a public audio-features dataset to replace the heuristic
 - [ ] Auto-advance to the next track as the current one ends
 
 ## Notes / known limits
 
-- Apple previews are AAC in an MP4 container. libsndfile can't decode AAC, so
-  `load_audio` walks soundfile → audioread (CoreAudio on macOS) → ffmpeg. **Install
-  ffmpeg on Linux/Docker.**
+- ffmpeg is **required**, not optional: every real preview is AAC and libsndfile
+  can't decode it. `imageio-ffmpeg` provides a binary as a normal pip dependency,
+  so `pip install` is sufficient; a system ffmpeg on `PATH` is preferred if present.
+- The scoring model is calibrated on 29 hand-labelled tracks. It reliably separates
+  calm from energetic, but not "rock" from "metal".
+- iTunes Search matches are **text** matches, not ISRC matches — a live version or
+  cover can slip through. They're confidence-discounted, which lowers their odds
+  during selection, but that's a hedge, not a fix. Configure Apple Music for exact
+  ISRC matching.
 - OAuth tokens are stored in plaintext in `users`. They need envelope encryption
   (KMS) before this goes near real users.
-- `ONSET_STRENGTH_FLOOR` was tuned on synthetic signals; it should be revisited
-  against a labelled set of real clips.
 - Session auth is an opaque bearer token, deliberately simple. It is not a
   production identity system.
 

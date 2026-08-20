@@ -1,17 +1,27 @@
 """Feature vector -> 1-100 mood score (calm ... hyper).
 
-Deliberately a *formalised heuristic*, not a black box: each feature is squashed
-to 0..1 against documented anchors, then combined with named weights. Two
-reasons that matters here --
+A *formalised heuristic*, not a black box: each feature is squashed to 0..1
+against documented anchors, then combined with named weights. The weights and
+anchors are data, not code, so swapping in a trained model later means
+replacing `score_features` while keeping the same feature vector and the same
+cached rows (see `MODEL_VERSION`). Persisted feature vectors make a re-score a
+pure database pass -- no audio is re-downloaded when the model changes.
 
-1. There is no labelled dataset yet, so a regression model would be fitting
-   noise. Hand-tuned anchors at least encode real acoustic intuition.
-2. The weights and anchors are data, not code, so swapping in a trained model
-   later means replacing `score_features` while keeping the same feature vector
-   and the same cached rows (see `MODEL_VERSION`).
+Calibration (see `scripts/calibrate.py`)
+----------------------------------------
+Anchors and weights are fitted to 29 real preview clips hand-labelled into five
+coarse energy tiers, scored by Spearman rank correlation between tier and
+output. v1 (guessed anchors, tempo-dominated) reached rho +0.53 and could not
+order the top three tiers at all -- their mean scores were 59.7 / 55.5 / 55.3.
+v2 reaches **rho +0.82** with monotonic tier means (8.2 / 34.3 / 60.9 / 69.0 /
+70.0). It wins on 399 of 400 random half-splits, and leave-one-out rho stays
+within 0.802-0.858, so the gain is not one lucky track.
 
-Persisted feature vectors make a re-score a pure database pass -- no audio is
-re-downloaded when the model changes.
+Honest limits: 29 tracks, tiers labelled by hand, and tiers 4 and 5 remain
+nearly tied (69.0 vs 70.0) -- loudness-war mastering leaves a pop master and a
+metal master with similar RMS. Treat these numbers as "clearly better than v1",
+not as validated accuracy. A model trained on a public audio-features dataset
+is the real fix.
 """
 
 from __future__ import annotations
@@ -19,7 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-MODEL_VERSION = "heuristic-v1"
+MODEL_VERSION = "heuristic-v2"
 
 MIN_SCORE = 1
 MAX_SCORE = 100
@@ -43,16 +53,29 @@ class FeatureAnchor:
         return 1.0 - t if self.invert else t
 
 
-# Anchors chosen from typical values over popular-music preview clips:
-# 60 BPM is a ballad, 180 BPM is drum & bass; centroid ~800 Hz is muddy/warm,
-# ~4.5 kHz is bright and cymbal-heavy; onset rate ~0.5/s is sparse, ~7/s is dense.
+# Anchors are the p5/p95 of each feature measured over real preview clips
+# (`scripts/calibrate.py`), not guessed. The first version of this table was
+# guessed and every anchor sat outside the real range -- `rms_mean` topped out
+# at 0.18 when real masters reach 0.32, so every loud track pinned to 1.0 and
+# the model could not tell pop from metal.
+#
+# Notable absence: tempo. Beat tracking on 30-second previews is unreliable
+# enough to be actively harmful here -- it put Clair de Lune at 172 BPM and
+# Killing in the Name at 83, and mean detected tempo per energy tier came out
+# 116/105/131/119/118, i.e. uncorrelated with energy. It carried the largest
+# weight (0.30). Dropping it moved rank correlation from +0.53 to +0.73.
+# `tempo_bpm` is still extracted and persisted; it is simply not trusted here.
+#
+# Notable addition: spectral_flatness, a noisiness measure. Distorted guitars,
+# cymbals and noise-heavy EDM are flat-spectrum; clean pop is not. It is what
+# finally separates the aggressive tiers from the merely loud ones.
 ANCHORS: tuple[FeatureAnchor, ...] = (
-    FeatureAnchor("tempo_bpm", 60.0, 180.0, weight=0.30),
-    FeatureAnchor("rms_mean", 0.010, 0.180, weight=0.22),
-    FeatureAnchor("onset_rate_hz", 0.5, 7.0, weight=0.18),
-    FeatureAnchor("spectral_centroid_hz", 800.0, 4500.0, weight=0.15),
-    FeatureAnchor("percussive_ratio", 0.15, 0.70, weight=0.10),
-    FeatureAnchor("tonal_valence", 0.0, 1.0, weight=0.05),
+    FeatureAnchor("rms_mean", 0.0595, 0.3185, weight=0.22),
+    FeatureAnchor("onset_rate_hz", 0.401, 4.557, weight=0.20),
+    FeatureAnchor("spectral_flatness", 0.0, 0.064, weight=0.18),
+    FeatureAnchor("spectral_centroid_hz", 509.3, 3100.0, weight=0.16),
+    FeatureAnchor("percussive_ratio", 0.0278, 0.4680, weight=0.12),
+    FeatureAnchor("zero_crossing_rate", 0.0321, 0.1476, weight=0.12),
 )
 
 _TOTAL_WEIGHT = sum(a.weight for a in ANCHORS)
