@@ -23,11 +23,13 @@ import asyncio
 import json
 import sys
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.clients.apple_music import AppleMatch, AppleMusicClient  # noqa: E402
+from app.clients.itunes import ITunesClient  # noqa: E402
 from app.clients.spotify import SpotifyClient  # noqa: E402
 from app.clients.storage import PreviewCache  # noqa: E402
 from app.config import get_settings  # noqa: E402
@@ -56,14 +58,34 @@ async def gather_targets(args: argparse.Namespace) -> list[tuple[str, str, str |
 
 
 async def resolve(
-    apple: AppleMusicClient, title: str, artist: str, isrc: str | None
+    apple: AppleMusicClient | None,
+    itunes: ITunesClient | None,
+    title: str,
+    artist: str,
+    isrc: str | None,
 ) -> AppleMatch | None:
-    if isrc:
-        match = await apple.find_by_isrc(isrc)
-        if match:
-            return match
-    if title:
-        return await apple.find_by_search(title, artist)
+    """Same tier order as the real pipeline: exact ISRC, then text search."""
+    if apple is not None:
+        if isrc:
+            match = await apple.find_by_isrc(isrc)
+            if match:
+                return match
+        if title:
+            match = await apple.find_by_search(title, artist)
+            if match:
+                return match
+
+    if itunes is not None and title:
+        found = await itunes.find(title, artist)
+        if found is not None:
+            return AppleMatch(
+                apple_catalog_id=found.apple_catalog_id,
+                preview_url=found.preview_url,
+                title=found.title,
+                artist=found.artist,
+                isrc=None,
+                match_method="fuzzy",
+            )
     return None
 
 
@@ -80,13 +102,24 @@ async def main() -> int:
     args = parser.parse_args()
 
     settings = get_settings()
-    if not settings.apple_music_configured:
+    if not settings.analysis_available:
         print(
-            "Apple Music is not configured. Set APPLE_TEAM_ID, APPLE_KEY_ID and\n"
-            "APPLE_PRIVATE_KEY_PATH in server/.env (see .env.example).",
+            "No preview source available. Either configure Apple Music\n"
+            "(APPLE_TEAM_ID / APPLE_KEY_ID / APPLE_PRIVATE_KEY_PATH) or set\n"
+            "PREVIEW_SOURCE=auto to use the credential-free iTunes fallback.",
             file=sys.stderr,
         )
         return 2
+
+    source = "Apple Music catalog" if settings.use_apple_music else "iTunes Search"
+    print(f"preview source: {source}", file=sys.stderr)
+    if not settings.use_apple_music:
+        print(
+            "  note: iTunes Search has no ISRC lookup, so matches are text-based\n"
+            "  and could be a live version or cover. Configure Apple Music for\n"
+            "  exact ISRC matching.",
+            file=sys.stderr,
+        )
 
     targets = await gather_targets(args)
     if not targets:
@@ -98,12 +131,22 @@ async def main() -> int:
     matched = 0
     started = time.perf_counter()
 
-    async with AppleMusicClient(settings) as apple:
+    async with AsyncExitStack() as stack:
+        apple = (
+            await stack.enter_async_context(AppleMusicClient(settings))
+            if settings.use_apple_music
+            else None
+        )
+        itunes = (
+            await stack.enter_async_context(ITunesClient(storefront=settings.apple_storefront))
+            if settings.use_itunes_fallback
+            else None
+        )
         for title, artist, isrc in targets:
             label = f"{title} - {artist}" if artist else title
-            match = await resolve(apple, title, artist, isrc)
+            match = await resolve(apple, itunes, title, artist, isrc)
             if match is None or not match.preview_url:
-                print(f"  ..  {label}: no Apple Music preview", file=sys.stderr)
+                print(f"  ..  {label}: no preview found", file=sys.stderr)
                 rows.append({"label": label, "status": "no_preview"})
                 continue
 
@@ -111,7 +154,8 @@ async def main() -> int:
             key = match.isrc or isrc or match.apple_catalog_id
             audio = cache.get(key)
             if audio is None:
-                audio = await apple.download_preview(match.preview_url)
+                downloader = apple or itunes
+                audio = await downloader.download_preview(match.preview_url)
                 cache.put(key, audio)
 
             t0 = time.perf_counter()
