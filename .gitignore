@@ -1,0 +1,46 @@
+# --- Secrets ---
+.env
+.env.local
+*.p8
+*.pem
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+uv.lock
+
+# --- Node / Expo ---
+node_modules/
+.expo/
+dist/
+web-build/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# --- Native ---
+ios/Pods/
+ios/build/
+android/.gradle/
+android/build/
+android/app/build/
+
+# --- Local data ---
+*.sqlite3
+*.db
+.cache/
+previews/
+
+# --- OS / editors ---
+.DS_Store
+.idea/
+.vscode/
+
+# --- Local tooling ---
+.claude/settings.local.json

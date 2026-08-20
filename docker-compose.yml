@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: moodsync-db
+    environment:
+      POSTGRES_USER: moodsync
+      POSTGRES_PASSWORD: moodsync
+      POSTGRES_DB: moodsync
+    ports:
+      - '5432:5432'
+    volumes:
+      - moodsync_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U moodsync']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./server
+    container_name: moodsync-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://moodsync:moodsync@db:5432/moodsync
+    env_file:
+      - path: ./server/.env
+        required: false
+    ports:
+      - '8000:8000'
+    volumes:
+      - ./server:/app
+      - moodsync_previews:/app/.cache/previews
+    # Reload is fine here; this compose file is for local development only.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  moodsync_pgdata:
+  moodsync_previews:
