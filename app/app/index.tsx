@@ -1,9 +1,9 @@
 import { Link } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { describeError } from '@/api/client';
+import { API_BASE_URL, describeError } from '@/api/client';
 import { useLogin, useMe, useMoodMatch, useSession } from '@/api/hooks';
 import type { MoodMatch } from '@/api/types';
 import { MoodSlider } from '@/components/MoodSlider';
@@ -120,11 +120,22 @@ function SignIn({
   error: unknown;
 }) {
   const [demoPending, setDemoPending] = useState(false);
+  const [showPaste, setShowPaste] = useState(false);
+  const [token, setToken] = useState('');
   const session = useSession();
 
+  const useToken = async (value: string) => {
+    await setSessionToken(value.trim());
+    await session.refetch();
+  };
+
   return (
-    <View className="flex-1 items-center justify-center bg-ink-900 px-8">
-      <Text className="text-4xl font-bold text-slate-100">MoodSync</Text>
+    <ScrollView
+      className="flex-1 bg-ink-900"
+      contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: 32 }}
+      keyboardShouldPersistTaps="handled"
+    >
+      <Text className="text-center text-4xl font-bold text-slate-100">MoodSync</Text>
       <Text className="mt-3 text-center text-slate-400">
         One slider, calm to hyper. It picks from your own library so you never have to
         search for a song again.
@@ -145,8 +156,7 @@ function SignIn({
         onPress={async () => {
           // Matches scripts/seed_demo.py, so the UI is usable with no API keys.
           setDemoPending(true);
-          await setSessionToken('demo-session-token');
-          await session.refetch();
+          await useToken('demo-session-token');
           setDemoPending(false);
         }}
         className="mt-3 w-full items-center rounded-xl border border-ink-600 py-4 active:opacity-70"
@@ -157,9 +167,46 @@ function SignIn({
         </Text>
       </Pressable>
 
+      {/*
+        In-app Spotify sign-in needs a redirect URI Spotify will accept, which in
+        Expo Go is an exp:// URL containing a LAN IP that changes with the
+        network. Signing in at <api>/auth/spotify/login instead does the whole
+        flow server-side and prints a session token; this is where it goes.
+      */}
+      <Pressable onPress={() => setShowPaste((v) => !v)} className="mt-6 py-2">
+        <Text className="text-center text-xs text-slate-500">
+          {showPaste ? 'Hide' : 'Already signed in on the web? Paste a session token'}
+        </Text>
+      </Pressable>
+
+      {showPaste ? (
+        <View className="w-full">
+          <TextInput
+            value={token}
+            onChangeText={setToken}
+            placeholder="session token"
+            placeholderTextColor="#64748b"
+            autoCapitalize="none"
+            autoCorrect={false}
+            className="w-full rounded-xl border border-ink-600 bg-ink-800 px-4 py-3 font-mono text-sm text-slate-100"
+          />
+          <Pressable
+            onPress={() => useToken(token)}
+            disabled={!token.trim()}
+            className="mt-2 w-full items-center rounded-xl border border-slate-500 py-3 active:opacity-70"
+            accessibilityRole="button"
+          >
+            <Text className={token.trim() ? 'text-slate-200' : 'text-slate-600'}>Use token</Text>
+          </Pressable>
+          <Text className="mt-2 text-center text-[10px] text-slate-600">
+            Get one from {API_BASE_URL}/auth/spotify/login
+          </Text>
+        </View>
+      ) : null}
+
       {error ? (
         <Text className="mt-6 text-center text-sm text-rose-400">{describeError(error)}</Text>
       ) : null}
-    </View>
+    </ScrollView>
   );
 }
