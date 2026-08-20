@@ -9,7 +9,7 @@ import type { MoodMatch } from '@/api/types';
 import { MoodSlider } from '@/components/MoodSlider';
 import { PlaybackToggle } from '@/components/PlaybackToggle';
 import { NowPlaying } from '@/components/NowPlaying';
-import { setSessionToken, spotifyRedirectUri } from '@/auth/session';
+import { redirectUriProblem, setSessionToken, spotifyRedirectUri } from '@/auth/session';
 import { moodTheme } from '@/lib/mood';
 import { usePlayback, type PlaybackPreference } from '@/playback/usePlayback';
 
@@ -137,6 +137,8 @@ function SignIn({
   const [showPaste, setShowPaste] = useState(false);
   const [token, setToken] = useState('');
   const session = useSession();
+  const redirectUri = spotifyRedirectUri();
+  const redirectProblem = redirectUriProblem(redirectUri);
 
   const useToken = async (value: string) => {
     await setSessionToken(value.trim());
@@ -165,6 +167,17 @@ function SignIn({
           {pending ? 'Connecting…' : 'Continue with Spotify'}
         </Text>
       </Pressable>
+
+      {/* Say this before the user round-trips to Spotify and gets a bare
+          "redirect_uri: Not matching configuration" with no explanation. */}
+      {redirectProblem ? (
+        <View className="mt-3 w-full rounded-xl border border-amber-900/60 bg-amber-950/20 p-3">
+          <Text className="text-[11px] text-amber-300">{redirectProblem}</Text>
+          <Text selectable className="mt-2 font-mono text-[10px] text-slate-400">
+            {redirectUri}
+          </Text>
+        </View>
+      ) : null}
 
       <Pressable
         onPress={async () => {
@@ -231,7 +244,7 @@ function SignIn({
             Redirect URIs), or use the web login above instead:
           </Text>
           <Text selectable className="mt-1 font-mono text-[11px] text-amber-300">
-            {spotifyRedirectUri()}
+            {redirectUri}
           </Text>
         </View>
       ) : null}

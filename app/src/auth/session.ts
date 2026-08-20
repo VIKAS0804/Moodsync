@@ -70,6 +70,38 @@ export function spotifyRedirectUri(): string {
 }
 
 /**
+ * Why Spotify will refuse this redirect, if it will.
+ *
+ * Spotify requires redirect URIs to be HTTPS, with one exception: loopback,
+ * which must be the *IP literal* `127.0.0.1`. `localhost` is not accepted. On
+ * web the redirect is derived from the browser origin, so opening the dev server
+ * at localhost produces a URI that cannot be registered — and the dashboard
+ * rejects it rather than explaining why.
+ *
+ * Serving the same page from 127.0.0.1 fixes it, and it has to be the origin
+ * rather than a rewrite: `localhost` and `127.0.0.1` are separate origins, so a
+ * PKCE verifier written under one is invisible to the other.
+ */
+export function redirectUriProblem(uri: string): string | null {
+  if (uri.includes('://localhost')) {
+    const fixed = uri.replace('://localhost', '://127.0.0.1');
+    return (
+      `Spotify rejects "localhost" — it only allows HTTPS or the literal ` +
+      `127.0.0.1. Open the app at ${fixed.replace('/callback', '')} instead, ` +
+      `and register ${fixed}`
+    );
+  }
+  if (uri.startsWith('exp://')) {
+    return (
+      `Expo Go redirects embed this machine's IP, so this exact value must be ` +
+      `registered in the Spotify dashboard and re-registered whenever the ` +
+      `network changes. The web login avoids that entirely.`
+    );
+  }
+  return null;
+}
+
+/**
  * Run Authorization Code + PKCE against Spotify, then exchange the code
  * server-side. Returns the MoodSync session, or null if the user cancelled.
  */

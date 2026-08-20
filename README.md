@@ -137,9 +137,20 @@ remote sign-in.
 
 Fill in `server/.env`:
 
-- **Spotify** — [developer dashboard](https://developer.spotify.com/dashboard), add
-  redirect URI `moodsync://callback`. The app is a public client using PKCE, so the
-  client secret is optional and server-side only.
+- **Spotify** — [developer dashboard](https://developer.spotify.com/dashboard). The app
+  is a public client using PKCE, so the client secret is optional and server-side only.
+  Redirect URIs must be HTTPS or the loopback **IP literal**; Spotify rejects
+  `localhost`. Register whichever you'll use:
+
+  | Signing in from | Register | Note |
+  |---|---|---|
+  | Browser login (`/auth/spotify/login`) | `http://127.0.0.1:8000/auth/spotify/callback` | Simplest; server-side flow |
+  | The app on web | `http://127.0.0.1:8081/callback` | Open the app at `127.0.0.1:8081`, **not** `localhost` — different origins, and the PKCE verifier is per-origin |
+  | The app in Expo Go | `exp://<lan-ip>:8081/--/callback` | Embeds the dev machine's IP, so it changes with the network |
+  | Standalone build | `moodsync://callback` | Stable |
+
+  The sign-in screen prints the exact redirect this build will use, and flags it when
+  Spotify won't accept it.
 - **Apple Music** *(optional)* — Apple Developer → Keys → enable MusicKit, download
   the `.p8` once. Only a *developer* token is needed; no Apple Music subscription, no
   user token. **Without it the pipeline still runs**, falling back to the
