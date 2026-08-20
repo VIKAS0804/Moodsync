@@ -96,6 +96,7 @@ curl -H "Authorization: Bearer demo-session-token" localhost:8000/mood/85
 cd ../app
 npm install
 npx expo start        # then tap "Try the demo library"
+                      # press w for browser, or scan the QR with Expo Go
 ```
 
 API docs are at `http://localhost:8000/docs`.
