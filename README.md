@@ -66,7 +66,7 @@ server/        FastAPI backend + the mood-analysis pipeline
     models.py  SQLAlchemy ORM
     selection.py  slider position → track
   scripts/     phase1_pipeline.py · calibrate.py · seed_demo.py · rescore.py
-  tests/       52 tests
+  tests/       60 tests
 app/           Expo mobile app
   app/         expo-router screens
   src/         api · auth · components · playback · lib
@@ -256,7 +256,7 @@ time you landed on 72, which reads as broken.
 ## Tests
 
 ```bash
-cd server && .venv/bin/python -m pytest -q     # 52 passed
+cd server && .venv/bin/python -m pytest -q     # 60 passed
 cd app && npm run typecheck
 ```
 
