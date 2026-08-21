@@ -258,3 +258,49 @@ seconds and wrote **244,000** `analysis_jobs` rows before being killed.
 `scripts/backfill.py` also stops when a batch makes no progress at all, on the
 principle that if nothing scored *and* nothing reached a terminal state, the
 problem is upstream and retrying harder won't fix it.
+
+
+---
+
+## 11. Where training labels come from
+
+**Decided: the listener's own corrections, not a public dataset.**
+
+[VibeScape](https://github.com/chandankeelara/VibeScape) fine-tunes MERT-v1-95M
+on a public Spotify audio-features dump, predicting danceability/energy/valence
+straight from waveforms. With a GPU and that corpus it's the stronger approach,
+and it doesn't depend on hand-picked features.
+
+This project sits differently, in two ways that matter:
+
+1. **The features are already persisted.** Every scored track carries its
+   feature vector, so a model over those vectors trains in seconds on a CPU and
+   needs no new audio. Re-scoring is already a pure database pass.
+2. **A public dataset has the wrong distribution.** Calibration here was tuned
+   on 29 English-language tracks, and the first real library tested was mostly
+   Telugu and film scores. A dump of Western pop wouldn't close that gap;
+   corrections from the person whose library it is do, by construction.
+
+So `POST /mood/label` records a human score, and `scripts/train_model.py` fits
+Ridge and gradient boosting on those pairs, split **grouped by artist** (the same
+guard VibeScape applies via `group_col: artists`). If the heuristic still wins on
+the held-out split, nothing is saved and the script says so — the bar for
+replacing a model that scores rho +0.82 is beating it, not merely existing.
+
+A correction also overrides the model for that listener immediately. Anything
+less would be dishonest: a score you've told the app is wrong should stop
+deciding where the slider finds that track, not just what the label reads.
+
+Saved models are JSON, not pickles: reviewable in a diff, carrying the metrics
+that justified them, and loading one can't execute code.
+
+## 12. What was not taken from VibeScape
+
+Their newest revision adds a YouTube player, backed by `build_cookies_file.py`
+which lifts cookies out of a logged-in browser session so yt-dlp can fetch audio.
+
+**Not ported.** It's a way around YouTube's terms rather than a licensed audio
+source, and this project already has licensed full-track playback via the
+Spotify Web Playback SDK plus preview audio that Apple publishes for exactly
+this purpose. Adding a third path that depends on scraped session cookies would
+trade a legitimate integration for a fragile one.

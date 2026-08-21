@@ -85,6 +85,29 @@ export function usePairDevice() {
   });
 }
 
+/**
+ * Correct a track's score.
+ *
+ * Ported from VibeScape's manual override, and it does double duty: the
+ * correction wins over the model for this listener straight away, and it's a
+ * training label for scripts/train_model.py -- drawn from this user's own
+ * genres rather than a public dataset's.
+ */
+export function useLabelTrack() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { score: number; model_score: number | null; mood_label: string; total_labels: number },
+    Error,
+    { trackId: string; score: number }
+  >({
+    mutationFn: async ({ trackId, score }) => {
+      const response = await api.post('/mood/label', { track_id: trackId, score });
+      return response.data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.me }),
+  });
+}
+
 export function useLogout() {
   const queryClient = useQueryClient();
   return useMutation({

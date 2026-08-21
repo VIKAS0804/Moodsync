@@ -67,7 +67,7 @@ server/        FastAPI backend + the mood-analysis pipeline
     models.py  SQLAlchemy ORM
     selection.py  slider position → track
   scripts/     phase1_pipeline.py · calibrate.py · seed_demo.py · rescore.py
-               backfill.py · repair_catalog.py · dev_sync_schema.py
+               backfill.py · train_model.py · repair_catalog.py · dev_sync_schema.py
   tests/       60 tests
 app/           Expo mobile app
   app/         expo-router screens
@@ -226,7 +226,35 @@ separates aggressive tracks from merely loud ones.
 The weights being *data* means swapping in a trained model later only replaces
 `score_features`, keeping the same feature vector and the same cached rows.
 
-### Calibration
+#### Learning from corrections
+
+The heuristic is a starting point, not the destination. Every score can be
+corrected in the app ("calmer" / "more intense"), and a correction does two
+things: it overrides the model for that listener immediately — `selection`
+searches on the corrected value, so the track actually *moves* — and it becomes
+a training label.
+
+```bash
+.venv/bin/python scripts/train_model.py --report   # labels + biggest disagreements
+.venv/bin/python scripts/train_model.py            # train + evaluate
+.venv/bin/python scripts/train_model.py --save     # persist, only if it wins
+```
+
+Ridge and gradient boosting are compared against the heuristic on a split
+**grouped by artist**, so no artist appears on both sides. If the heuristic still
+wins, nothing is saved — and it says so. A saved model is plain JSON (readable,
+diffable, and loading it can't execute anything), carries the metrics that
+justified it, and is picked up automatically by `scoring.active_model_version()`.
+
+This is deliberately not [VibeScape's approach](https://github.com/chandankeelara/VibeScape),
+which fine-tunes MERT-v1-95M on a public audio-features dataset. That's stronger
+given a GPU and a labelled corpus. But the DSP features here are already
+persisted for every track, so a model over those vectors trains in seconds on a
+CPU with no new downloads — and labels from a listener correcting their own
+library cover the genres that library actually contains, which is exactly the gap
+left by calibrating on 29 English-language tracks.
+
+## Calibration
 
 `scripts/calibrate.py` fetches 30 real previews (no credentials needed), extracts
 features, and scores the model by Spearman rank correlation against five hand-labelled
@@ -292,6 +320,12 @@ can't be used to detect Spotify there — it only answers truthfully for schemes
 the app's own `LSApplicationQueriesSchemes`, and Expo Go runs under its own
 Info.plist, so it reports "not installed" regardless. Attempt `openURL` instead;
 it has no such restriction.
+
+**OS-level controls.** On web, the Media Session API puts the track on the lock
+screen and wires up Bluetooth, steering-wheel and AirPods buttons — for an app
+built for driving and the gym, not having to look at the screen is the point.
+"Next" is bound to "another track at this mood", which is the app's real verb.
+Keyboard transport too: space, arrows to seek, `N` for another track.
 
 A listener can also *choose*: **Auto / Full song / 30s**. Preview isn't only a
 fallback — it keeps playback inside MoodSync instead of handing the screen to

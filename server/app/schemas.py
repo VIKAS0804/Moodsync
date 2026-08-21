@@ -120,6 +120,19 @@ class MoodMatchResponse(BaseModel):
     library_stddev: float | None = None
 
 
+class MoodLabelRequest(BaseModel):
+    track_id: str
+    score: int = Field(..., ge=1, le=100)
+
+
+class MoodLabelResponse(BaseModel):
+    track_id: str
+    score: int
+    model_score: int | None
+    mood_label: str
+    total_labels: int
+
+
 class AnalysisStatusResponse(BaseModel):
     total_tracks: int
     scored: int

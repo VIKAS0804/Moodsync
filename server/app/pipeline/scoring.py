@@ -26,8 +26,14 @@ is the real fix.
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 MODEL_VERSION = "heuristic-v2"
 
@@ -101,11 +107,61 @@ def energy_index(features: dict[str, Any]) -> float:
     return total / used_weight
 
 
+@lru_cache(maxsize=1)
+def _learned_model() -> dict[str, Any] | None:
+    """A model fitted by `scripts/train_model.py`, if one has been saved.
+
+    Deliberately a plain JSON linear model rather than a pickle: it can be read,
+    diffed and reviewed, it carries the metrics that justified replacing the
+    heuristic, and loading it can't execute anything. Absent means "use the
+    heuristic", which is the correct default until a model demonstrably wins.
+    """
+    path = Path(__file__).with_name("models") / "learned-v1.json"
+    if not path.is_file():
+        return None
+    try:
+        model = json.loads(path.read_text())
+    except (OSError, ValueError):
+        log.warning("learned model at %s is unreadable; falling back to the heuristic", path)
+        return None
+    if model.get("kind") != "ridge":
+        log.warning("unsupported learned model kind %r; using the heuristic", model.get("kind"))
+        return None
+    return model
+
+
+def active_model_version() -> str:
+    model = _learned_model()
+    return model["model_version"] if model else MODEL_VERSION
+
+
 def score_features(features: dict[str, Any]) -> int:
     """Map a feature vector onto the 1-100 slider scale."""
+    model = _learned_model()
+    if model is not None:
+        score = _score_with_model(model, features)
+        if score is not None:
+            return score
+
     index = energy_index(features)
     score = MIN_SCORE + index * (MAX_SCORE - MIN_SCORE)
     return int(round(min(float(MAX_SCORE), max(float(MIN_SCORE), score))))
+
+
+def _score_with_model(model: dict[str, Any], features: dict[str, Any]) -> int | None:
+    """Standardise, dot with the coefficients, clamp. None if the vector is unusable."""
+    names = model["feature_names"]
+    try:
+        raw = [float(features.get(n) or 0.0) for n in names]
+    except (TypeError, ValueError):
+        return None
+
+    total = float(model["intercept"])
+    for value, mean, scale, coef in zip(
+        raw, model["mean"], model["scale"], model["coef"], strict=True
+    ):
+        total += coef * ((value - mean) / (scale or 1.0))
+    return int(round(min(float(MAX_SCORE), max(float(MIN_SCORE), total))))
 
 
 def explain(features: dict[str, Any]) -> dict[str, Any]:

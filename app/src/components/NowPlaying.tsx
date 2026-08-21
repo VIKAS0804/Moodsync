@@ -27,6 +27,9 @@ interface Props {
   onTogglePlay: () => void;
   onSeek: (positionMs: number) => void;
   onNudge: (deltaMs: number) => void;
+  /** Correct this track's mood score. */
+  onLabel: (score: number) => void;
+  labelPending: boolean;
 }
 
 export function NowPlaying({
@@ -43,6 +46,8 @@ export function NowPlaying({
   onTogglePlay,
   onSeek,
   onNudge,
+  onLabel,
+  labelPending,
 }: Props) {
   if (loading && !match) {
     return (
@@ -131,8 +136,36 @@ export function NowPlaying({
         <Text className="font-semibold text-slate-300">Another like this</Text>
       </Pressable>
 
-      <Text className="mt-3 text-center text-[10px] text-slate-600">
-        {match.pool_size} scored tracks · {match.model_version} · {Math.round(match.latency_ms)}ms
+      {/*
+        Disagreeing with a score has to be cheap, or nobody ever does it. Two
+        taps move the track 15 points and become a training label -- from this
+        listener's own genres, which is the gap a public dataset can't fill.
+      */}
+      <View className="mt-3 flex-row items-center justify-center gap-2">
+        <Text className="text-[10px] text-slate-600">Wrong mood?</Text>
+        <Pressable
+          onPress={() => onLabel(Math.max(1, match.track_score - 15))}
+          disabled={labelPending}
+          className="rounded-lg border border-ink-600 px-3 py-1.5 active:opacity-70"
+          accessibilityRole="button"
+          accessibilityLabel="This track is calmer than scored"
+        >
+          <Text className="text-[11px] text-sky-300">calmer</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => onLabel(Math.min(100, match.track_score + 15))}
+          disabled={labelPending}
+          className="rounded-lg border border-ink-600 px-3 py-1.5 active:opacity-70"
+          accessibilityRole="button"
+          accessibilityLabel="This track is more intense than scored"
+        >
+          <Text className="text-[11px] text-rose-300">more intense</Text>
+        </Pressable>
+      </View>
+
+      <Text className="mt-2 text-center text-[10px] text-slate-600">
+        {match.pool_size} scored · {match.model_version} · {Math.round(match.latency_ms)}ms
+        {match.slider_mode === 'relative' ? ' · relative' : ''}
       </Text>
     </View>
   );

@@ -26,6 +26,12 @@ export interface MoodMatch {
   playback_mode: PlaybackMode;
   pool_size: number;
   latency_ms: number;
+  /** "relative" = read as a percentile of this user's library; "absolute" = face value. */
+  slider_mode: 'relative' | 'absolute';
+  /** The absolute score actually searched for, after any mapping. */
+  absolute_target: number;
+  library_mean: number | null;
+  library_stddev: number | null;
 }
 
 export interface AuthSession {

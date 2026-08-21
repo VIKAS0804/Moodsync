@@ -165,7 +165,7 @@ async def analyze_track(
             db.add(row)
         row.score = score
         row.confidence = confidence
-        row.model_version = scoring.MODEL_VERSION
+        row.model_version = scoring.active_model_version()
         row.feature_vector = vector
         row.computed_at = _utcnow()
         db.commit()

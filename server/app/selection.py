@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import AppleCatalogMap, MoodScore, Track, User, UserTrack
+from app.models import AppleCatalogMap, MoodLabel, MoodScore, Track, User, UserTrack
 
 # Below this, a mean/sd is noise and the absolute scale is the safer default.
 MIN_TRACKS_FOR_RELATIVE = 8
@@ -56,9 +56,15 @@ class Candidate:
 
 
 def library_scores(db: Session, user_id: str) -> list[int]:
+    """Scores as this listener sees them, corrections included."""
     stmt = (
-        select(MoodScore.score)
+        select(func.coalesce(MoodLabel.score, MoodScore.score))
+        .select_from(MoodScore)
         .join(UserTrack, UserTrack.track_id == MoodScore.track_id)
+        .outerjoin(
+            MoodLabel,
+            (MoodLabel.track_id == MoodScore.track_id) & (MoodLabel.user_id == user_id),
+        )
         .where(UserTrack.user_id == user_id)
     )
     return list(db.execute(stmt).scalars().all())
@@ -105,12 +111,25 @@ def resolve_target(user: User, slider: int, absolute: bool = False) -> tuple[int
     return int(round(min(100.0, max(1.0, target)))), "relative"
 
 
+def effective_score(user_id: str):
+    """A listener's own correction beats the model, for that listener only.
+
+    Selection has to search on the score the user actually believes, otherwise
+    correcting a track changes what it *says* but not where the slider finds it.
+    """
+    return func.coalesce(MoodLabel.score, MoodScore.score)
+
+
 def _base_query(user_id: str):
     return (
-        select(Track, MoodScore, AppleCatalogMap.preview_url)
+        select(Track, MoodScore, AppleCatalogMap.preview_url, MoodLabel.score)
         .join(MoodScore, MoodScore.track_id == Track.id)
         .join(UserTrack, UserTrack.track_id == Track.id)
         .outerjoin(AppleCatalogMap, AppleCatalogMap.isrc == Track.isrc)
+        .outerjoin(
+            MoodLabel,
+            (MoodLabel.track_id == Track.id) & (MoodLabel.user_id == user_id),
+        )
         .where(UserTrack.user_id == user_id)
     )
 
@@ -131,9 +150,10 @@ def candidates_near(
 ) -> list[Candidate]:
     """Widen the mood window until we find something, then return the k nearest."""
     exclude = exclude or set()
+    effective = effective_score(user_id)
     for window in WINDOW_STEPS:
         stmt = _base_query(user_id).where(
-            MoodScore.score >= target - window, MoodScore.score <= target + window
+            effective >= target - window, effective <= target + window
         )
         if exclude:
             stmt = stmt.where(Track.spotify_track_id.notin_(exclude))
@@ -142,12 +162,13 @@ def candidates_near(
             found = [
                 Candidate(
                     track=track,
-                    score=mood.score,
+                    score=label if label is not None else mood.score,
                     confidence=mood.confidence,
-                    model_version=mood.model_version,
+                    # A human correction is not the model's opinion any more.
+                    model_version="human" if label is not None else mood.model_version,
                     preview_url=preview_url,
                 )
-                for track, mood, preview_url in rows
+                for track, mood, preview_url, label in rows
             ]
             found.sort(key=lambda c: abs(c.score - target))
             return found[:CANDIDATE_POOL]
@@ -158,8 +179,14 @@ def candidates_near(
         stmt = stmt.where(Track.spotify_track_id.notin_(exclude))
     rows = db.execute(stmt).all()
     found = [
-        Candidate(track, mood.score, mood.confidence, mood.model_version, preview)
-        for track, mood, preview in rows
+        Candidate(
+            track,
+            label if label is not None else mood.score,
+            mood.confidence,
+            "human" if label is not None else mood.model_version,
+            preview,
+        )
+        for track, mood, preview, label in rows
     ]
     found.sort(key=lambda c: abs(c.score - target))
     return found[:CANDIDATE_POOL]

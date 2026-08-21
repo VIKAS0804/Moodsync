@@ -140,6 +140,32 @@ class MoodScore(Base):
     track: Mapped[Track] = relationship(back_populates="mood")
 
 
+class MoodLabel(Base):
+    """A listener's correction of a track's score.
+
+    Two jobs at once. It overrides the model for that listener immediately, so
+    a wrong score is fixable rather than something to live with. And it is a
+    *label*: (feature_vector, human score) pairs are exactly what's needed to
+    train a model, and they come from the population that matters -- this
+    user's own library, whatever genres that contains.
+
+    One row per user per track; a later correction replaces the earlier one.
+    """
+
+    __tablename__ = "mood_labels"
+    __table_args__ = (UniqueConstraint("user_id", "track_id", name="uq_user_track_label"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    track_id: Mapped[str] = mapped_column(ForeignKey("tracks.id", ondelete="CASCADE"), index=True)
+    score: Mapped[int] = mapped_column(Integer)
+    # What the model said when the human disagreed, so drift is measurable.
+    model_score: Mapped[int | None] = mapped_column(Integer)
+    model_version: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class AppleCatalogMap(Base):
     """ISRC -> Apple Music catalog id + 30s preview URL. One lookup per track, ever."""
 

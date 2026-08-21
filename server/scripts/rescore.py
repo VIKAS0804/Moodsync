@@ -55,14 +55,14 @@ def main() -> int:
             )
             if not args.dry_run:
                 mood.score = new_score
-                mood.model_version = scoring.MODEL_VERSION
+                mood.model_version = scoring.active_model_version()
                 mood.computed_at = datetime.now(UTC)
 
         if not args.dry_run:
             db.commit()
 
         verb = "would change" if args.dry_run else "changed"
-        print(f"\n{changed}/{len(rows)} scores {verb} (model {scoring.MODEL_VERSION})")
+        print(f"\n{changed}/{len(rows)} scores {verb} (model {scoring.active_model_version()})")
         if changed:
             print(f"mean absolute shift: {total_delta / changed:.1f} points")
         return 0

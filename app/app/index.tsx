@@ -1,10 +1,17 @@
 import { Link } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { API_BASE_URL, describeError } from '@/api/client';
-import { useLogin, useMe, useMoodMatch, usePairDevice, useSession } from '@/api/hooks';
+import {
+  useLabelTrack,
+  useLogin,
+  useMe,
+  useMoodMatch,
+  usePairDevice,
+  useSession,
+} from '@/api/hooks';
 import type { MoodMatch } from '@/api/types';
 import { MoodSlider } from '@/components/MoodSlider';
 import { PlaybackToggle } from '@/components/PlaybackToggle';
@@ -13,6 +20,12 @@ import { redirectUriProblem, setSessionToken, spotifyRedirectUri } from '@/auth/
 import { moodTheme } from '@/lib/mood';
 import { usePlayback, type PlaybackPreference } from '@/playback/usePlayback';
 import { activateWebPlayerElement } from '@/playback/webSpotify';
+import {
+  registerMediaSessionHandlers,
+  setMediaSessionPlaying,
+  setMediaSessionPosition,
+  setMediaSessionTrack,
+} from '@/playback/mediaSession';
 
 /** Keep the last few picks out of the pool so the slider doesn't loop. */
 const RECENT_MEMORY = 5;
@@ -24,12 +37,16 @@ export default function MoodScreen() {
   const [error, setError] = useState<string | null>(null);
   const [preference, setPreference] = useState<PlaybackPreference>('auto');
   const recent = useRef<string[]>([]);
+  // Handlers are registered once but must read the *current* slider position.
+  const scoreRef = useRef(50);
+  scoreRef.current = score;
 
   const session = useSession();
   const me = useMe(Boolean(session.data));
   const login = useLogin();
   const moodMatch = useMoodMatch();
   const playback = usePlayback();
+  const label = useLabelTrack();
 
   const requestTrack = useCallback(
     async (target: number) => {
@@ -49,6 +66,69 @@ export default function MoodScreen() {
     },
     [moodMatch, playback, preference],
   );
+
+  // Keep the OS-level controls in step with what's actually playing, so the
+  // lock screen and Bluetooth buttons stay usable without looking at the phone.
+  useEffect(() => {
+    if (!match) return;
+    setMediaSessionTrack({
+      title: match.track.title,
+      artist: match.track.artist,
+      album: match.track.album,
+      artworkUrl: match.track.artwork_url,
+    });
+  }, [match]);
+
+  useEffect(() => {
+    setMediaSessionPlaying(playback.isPlaying);
+  }, [playback.isPlaying]);
+
+  useEffect(() => {
+    setMediaSessionPosition(playback.positionMs, playback.durationMs);
+  }, [playback.positionMs, playback.durationMs]);
+
+  useEffect(
+    () =>
+      registerMediaSessionHandlers({
+        onPlay: () => playback.resume(),
+        onPause: () => playback.pause(),
+        // "Next" means another track at this mood -- the app's actual verb.
+        onNextTrack: () => requestTrack(scoreRef.current),
+        onSeekBackward: () => playback.nudge(-10_000),
+        onSeekForward: () => playback.nudge(10_000),
+        onSeekTo: (ms) => playback.seekTo(ms),
+      }),
+    [playback, requestTrack],
+  );
+
+  // Keyboard transport on web: space to toggle, arrows to seek, N for another.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA)$/.test(target.tagName)) return;
+      switch (event.key) {
+        case ' ':
+          event.preventDefault();
+          playback.isPlaying ? playback.pause() : playback.resume();
+          break;
+        case 'ArrowLeft':
+          playback.nudge(-5_000);
+          break;
+        case 'ArrowRight':
+          playback.nudge(5_000);
+          break;
+        case 'n':
+        case 'N':
+          requestTrack(scoreRef.current);
+          break;
+        default:
+          return;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [playback, requestTrack]);
 
   if (session.isLoading) {
     return (
@@ -137,6 +217,10 @@ export default function MoodScreen() {
         }}
         onSeek={playback.seekTo}
         onNudge={playback.nudge}
+        onLabel={(newScore) =>
+          match && label.mutate({ trackId: match.track.id, score: newScore })
+        }
+        labelPending={label.isPending}
       />
     </ScrollView>
   );
