@@ -23,6 +23,7 @@ import type { MoodMatch } from '@/api/types';
 import { pauseSpotify, playViaSpotify } from '@/playback/spotify';
 import {
   connectWebPlayer,
+  disconnectWebPlayer,
   playTrackOnWebPlayer,
   webPlaybackSupported,
   webPlayerPause,
@@ -80,6 +81,12 @@ export function usePlayback() {
   const playerRef = useRef<AudioPlayer | null>(null);
   const [state, setState] = useState<PlaybackState>(INITIAL);
   const routeRef = useRef<PlaybackRoute>('none');
+  /**
+   * Bumped on every play request. `play` awaits several times, so a fast slider
+   * drag can have two calls in flight; whichever started last wins and the
+   * older one must abandon rather than also start audio.
+   */
+  const epochRef = useRef(0);
 
   const setRoute = (next: Partial<PlaybackState>) => {
     if (next.route) routeRef.current = next.route;
@@ -92,6 +99,8 @@ export function usePlayback() {
     return () => {
       playerRef.current?.remove();
       playerRef.current = null;
+      // Don't leave a "MoodSync" device registered in Spotify after we're gone.
+      disconnectWebPlayer();
     };
   }, []);
 
@@ -128,9 +137,41 @@ export function usePlayback() {
     playerRef.current = null;
   }, []);
 
+  /**
+   * Silence every route before starting another one.
+   *
+   * Each route owns a different audio pipeline, so stopping one says nothing
+   * about the others: tearing down the preview player left the Spotify web
+   * player streaming, and switching Full song -> 30s played both at once.
+   * Anything that starts audio must come through here first.
+   *
+   * Pausing the web player is safe even when we're about to start a new track
+   * on it, and cheap -- it's a local SDK call, not a network round trip.
+   */
+  const stopAll = useCallback(async () => {
+    stopPreview();
+
+    if (webPlayerReady()) {
+      try {
+        await webPlayerPause();
+      } catch {
+        // Already paused, or the device went away. Nothing to recover.
+      }
+    }
+
+    if (routeRef.current === 'spotify_remote') {
+      try {
+        await pauseSpotify();
+      } catch {
+        // App Remote not connected.
+      }
+    }
+    // Deep-link playback is owned by the Spotify app; we can't stop it, which
+    // is exactly why that route reports itself as not seekable.
+  }, [stopPreview]);
+
   const playPreview = useCallback(
     (url: string, reason: string | null) => {
-      stopPreview();
       const player = createAudioPlayer({ uri: url });
       playerRef.current = player;
       player.play();
@@ -143,7 +184,7 @@ export function usePlayback() {
         seekable: true,
       });
     },
-    [stopPreview],
+    [],
   );
 
   /** Full track in-page with transport control. Returns false if unavailable. */
@@ -180,7 +221,12 @@ export function usePlayback() {
 
   const play = useCallback(
     async (match: MoodMatch, preference: PlaybackPreference = 'auto') => {
-      stopPreview();
+      const epoch = ++epochRef.current;
+      const superseded = () => epoch !== epochRef.current;
+
+      // Exactly one route may be audible at a time.
+      await stopAll();
+      if (superseded()) return;
 
       if (preference === 'preview') {
         if (match.preview_url) {
@@ -198,10 +244,19 @@ export function usePlayback() {
 
       const wantsFull = preference === 'full' || match.playback_mode === 'spotify_remote';
 
-      if (wantsFull && (await tryWebPlayer(match))) return;
+      if (wantsFull) {
+        const started = await tryWebPlayer(match);
+        if (superseded()) {
+          // A newer request is running; don't leave this track audible.
+          if (started) await webPlayerPause().catch(() => undefined);
+          return;
+        }
+        if (started) return;
+      }
 
       if (wantsFull) {
         const result = await playViaSpotify(match.track.spotify_uri);
+        if (superseded()) return;
         if (result !== 'failed') {
           setRoute({
             route: result === 'remote' ? 'spotify_remote' : 'spotify_deep_link',
@@ -238,7 +293,7 @@ export function usePlayback() {
         seekable: false,
       });
     },
-    [playPreview, stopPreview, tryWebPlayer],
+    [playPreview, stopAll, tryWebPlayer],
   );
 
   const pause = useCallback(async () => {
@@ -253,6 +308,7 @@ export function usePlayback() {
     const route = routeRef.current;
     if (route === 'preview') playerRef.current?.play();
     else if (route === 'spotify_web') await webPlayerResume();
+    else return; // deep link / nothing to resume
     setState((prev) => ({ ...prev, isPlaying: true }));
   }, []);
 

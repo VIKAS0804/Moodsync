@@ -270,6 +270,13 @@ The UI always says which route you're hearing, and the transport controls are
 disabled rather than hidden when a route can't support them (deep link), so it's
 visible *that* seeking is unavailable.
 
+Each route owns a separate audio pipeline, so exactly one may be audible at a
+time and every path that starts audio goes through a single `stopAll()` first.
+Stopping the preview player says nothing about the Spotify web player, and vice
+versa — skipping that step plays a 30-second clip over a full track. `play()`
+also carries a generation counter, because it awaits several times and a fast
+slider drag can put two calls in flight.
+
 ## API
 
 | Endpoint | Purpose |
