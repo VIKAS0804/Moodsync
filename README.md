@@ -273,7 +273,14 @@ Spotify's player. Four tiers, best first:
 
 The Web Playback SDK is the only licensed route to full audio *we* control, so on
 web with Premium MoodSync is a real player: play/pause, a scrubbable progress bar,
-and ±10s. It turns the page into a Spotify playback device, which means it needs a
+and ±10s.
+
+One non-obvious requirement: `player.activateElement()` must be called **from a
+user gesture**. Without it the browser keeps the SDK's audio element muted while
+Spotify's API cheerfully reports `is_playing: true` — the page is silent and
+every diagnostic says playback is fine. The slider commits on a 350ms debounce,
+so by then the gesture context is gone; activation happens inside the tap
+handlers for the playback toggle and the play button instead. It turns the page into a Spotify playback device, which means it needs a
 Spotify access token in the browser — hence `GET /auth/spotify/playback-token`, a
 deliberate and documented exception to keeping tokens server-side. Everything else
 still uses the server's copy.

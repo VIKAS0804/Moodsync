@@ -12,6 +12,7 @@ import { NowPlaying } from '@/components/NowPlaying';
 import { redirectUriProblem, setSessionToken, spotifyRedirectUri } from '@/auth/session';
 import { moodTheme } from '@/lib/mood';
 import { usePlayback, type PlaybackPreference } from '@/playback/usePlayback';
+import { activateWebPlayerElement } from '@/playback/webSpotify';
 
 /** Keep the last few picks out of the pool so the slider doesn't loop. */
 const RECENT_MEMORY = 5;
@@ -103,6 +104,10 @@ export default function MoodScreen() {
           value={preference}
           onChange={(next) => {
             setPreference(next);
+            // Unblock the Spotify audio element from inside the tap handler.
+            // Doing it later (the slider commits on a debounce) is too late:
+            // the browser has already lost the user-gesture context.
+            if (next !== 'preview') void activateWebPlayerElement();
             // Re-route the current track immediately so the choice is audible.
             if (match) playback.play(match, next);
           }}
@@ -121,7 +126,15 @@ export default function MoodScreen() {
         durationMs={playback.durationMs}
         seekable={playback.seekable}
         onSkip={() => requestTrack(score)}
-        onTogglePlay={() => (playback.isPlaying ? playback.pause() : playback.resume())}
+        onTogglePlay={() => {
+          if (playback.isPlaying) {
+            playback.pause();
+            return;
+          }
+          // Same reason as the toggle: activation only counts inside a gesture.
+          void activateWebPlayerElement();
+          playback.resume();
+        }}
         onSeek={playback.seekTo}
         onNudge={playback.nudge}
       />

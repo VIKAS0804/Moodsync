@@ -36,6 +36,8 @@ interface SpotifyPlayer {
   resume(): Promise<void>;
   seek(positionMs: number): Promise<void>;
   setVolume(value: number): Promise<void>;
+  /** Unblocks the SDK's audio element. Must be called from a user gesture. */
+  activateElement?(): Promise<void>;
 }
 
 export const webPlaybackSupported = Platform.OS === 'web';
@@ -168,6 +170,29 @@ export async function playTrackOnWebPlayer(uri: string, token: string): Promise<
 }
 
 export const webPlayerReady = () => Boolean(player && deviceId);
+
+let elementActivated = false;
+
+/**
+ * Unblock the SDK's audio element.
+ *
+ * Browsers refuse to emit audio from an element that was never started by a
+ * user gesture. Spotify's API will happily report `is_playing: true` while the
+ * page stays silent, which looks exactly like playback being broken. Worse, the
+ * slider commits on a 350ms debounce, so by the time `play()` runs the gesture
+ * context is gone -- the call has to be made from the tap itself.
+ *
+ * Safe and cheap to call repeatedly; only the first one matters.
+ */
+export async function activateWebPlayerElement(): Promise<void> {
+  if (elementActivated || !player?.activateElement) return;
+  try {
+    await player.activateElement();
+    elementActivated = true;
+  } catch {
+    // Older SDK build, or already activated. Playback may still work.
+  }
+}
 
 export async function webPlayerPause() {
   await player?.pause();

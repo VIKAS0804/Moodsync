@@ -22,6 +22,7 @@ import { api } from '@/api/client';
 import type { MoodMatch } from '@/api/types';
 import { pauseSpotify, playViaSpotify } from '@/playback/spotify';
 import {
+  activateWebPlayerElement,
   connectWebPlayer,
   disconnectWebPlayer,
   playTrackOnWebPlayer,
@@ -187,9 +188,13 @@ export function usePlayback() {
     [],
   );
 
+  /** Last reason the web player declined, so the UI can say something useful. */
+  const webErrorRef = useRef<string | null>(null);
+
   /** Full track in-page with transport control. Returns false if unavailable. */
   const tryWebPlayer = useCallback(async (match: MoodMatch): Promise<boolean> => {
     if (!webPlaybackSupported) return false;
+    webErrorRef.current = null;
     try {
       const token = await fetchPlaybackToken();
       if (!webPlayerReady()) {
@@ -203,6 +208,9 @@ export function usePlayback() {
           }));
         });
       }
+      // Must happen before playback or the browser keeps the element muted;
+      // Spotify still reports is_playing, so the page looks broken instead.
+      await activateWebPlayerElement();
       await playTrackOnWebPlayer(match.track.spotify_uri, token);
       setRoute({
         route: 'spotify_web',
@@ -213,8 +221,11 @@ export function usePlayback() {
         seekable: true,
       });
       return true;
-    } catch {
-      // Premium missing, SDK blocked, or token refused -- fall through quietly.
+    } catch (err) {
+      // Record it: silently degrading here made this undiagnosable, and the
+      // causes (no Premium, SDK blocked, token refused, device gone) need
+      // different responses from the listener.
+      webErrorRef.current = err instanceof Error ? err.message : String(err);
       return false;
     }
   }, []);
@@ -283,7 +294,9 @@ export function usePlayback() {
       } else if (match.playback_mode !== 'spotify_remote' && preference !== 'full') {
         reason = 'Spotify Premium required for full tracks — playing a 30s preview.';
       } else if (webPlaybackSupported) {
-        reason = "Spotify wouldn't start the full track — playing a 30s preview.";
+        reason = webErrorRef.current
+          ? `Spotify: ${webErrorRef.current} — playing a 30s preview.`
+          : "Spotify wouldn't start the full track — playing a 30s preview.";
       } else {
         reason =
           'Full tracks need the Spotify app on this device (in-app playback ' +
