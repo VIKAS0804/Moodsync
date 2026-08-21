@@ -1,6 +1,14 @@
 import { Link } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { API_BASE_URL, describeError } from '@/api/client';
@@ -126,9 +134,12 @@ export default function MoodScreen() {
     [goNext, goPrevious, playback],
   );
 
-  // Keyboard transport on web: space to toggle, arrows to seek, N for another.
+  // Keyboard transport on web: space to toggle, arrows to seek, N/P to navigate.
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    // `window` exists in React Native but has no addEventListener, so a
+    // `typeof window === 'undefined'` guard passes on a phone and then throws.
+    // Platform is the only reliable check here.
+    if (Platform.OS !== 'web' || typeof window.addEventListener !== 'function') return;
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && /^(INPUT|TEXTAREA)$/.test(target.tagName)) return;
