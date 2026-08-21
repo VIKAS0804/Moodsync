@@ -37,6 +37,12 @@ export interface AuthSession {
   playback_mode: PlaybackMode;
 }
 
+export interface PairClaim {
+  session_token: string;
+  display_name: string | null;
+  has_premium: boolean;
+}
+
 export interface Me {
   user_id: string;
   display_name: string | null;

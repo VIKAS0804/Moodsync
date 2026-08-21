@@ -6,10 +6,11 @@ import type {
   AuthSession,
   Me,
   MoodMatch,
+  PairClaim,
   SpotifyConfig,
   SyncResult,
 } from '@/api/types';
-import { clearSession, getSessionToken, loginWithSpotify } from '@/auth/session';
+import { clearSession, getSessionToken, loginWithSpotify, setSessionToken } from '@/auth/session';
 
 export const queryKeys = {
   session: ['session'] as const,
@@ -59,6 +60,26 @@ export function useLogin() {
         });
         return response.data;
       });
+    },
+    onSuccess: () => queryClient.invalidateQueries(),
+  });
+}
+
+/**
+ * Pair this device using a code shown by the browser login.
+ *
+ * Avoids the mobile redirect problem entirely: in Expo Go the Spotify redirect
+ * is exp://<lan-ip>:8081/--/callback, which embeds the dev machine's IP and so
+ * must be registered and re-registered as the network changes. Signing in on a
+ * laptop and typing six digits needs no registration at all.
+ */
+export function usePairDevice() {
+  const queryClient = useQueryClient();
+  return useMutation<PairClaim, Error, string>({
+    mutationFn: async (code) => {
+      const response = await api.post<PairClaim>('/auth/pair/claim', { code: code.trim() });
+      await setSessionToken(response.data.session_token);
+      return response.data;
     },
     onSuccess: () => queryClient.invalidateQueries(),
   });

@@ -29,7 +29,13 @@ from app.config import Settings
 from app.db import get_db
 from app.deps import get_current_user, settings_dep, spotify_access_token
 from app.models import MoodScore, User, UserTrack
-from app.schemas import AuthCallbackRequest, AuthSessionResponse, MeResponse
+from app.schemas import (
+    AuthCallbackRequest,
+    AuthSessionResponse,
+    MeResponse,
+    PairClaimRequest,
+    PairClaimResponse,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -168,12 +174,20 @@ async def spotify_callback_browser(
         redirect_uri=settings.spotify_web_redirect_uri,
     )
 
+    pairing_code = _issue_pairing_code(session.session_token)
+
     return _page(
         f"Signed in as {session.display_name}",
         f"""
 <p>Spotify plan: <b>{session.product or "unknown"}</b> &middot;
 playback mode: <b>{session.playback_mode}</b></p>
-<p>Session token:</p>
+
+<p>To use this on your phone, open MoodSync in Expo Go and enter this code
+(valid 5 minutes, single use):</p>
+<pre style="background:#1B2540;padding:18px;border-radius:8px;font-size:34px;
+letter-spacing:8px;text-align:center;color:#34d399;margin:0 0 18px">{pairing_code}</pre>
+
+<p>Session token (if you'd rather paste it):</p>
 <pre style="background:#1B2540;padding:14px;border-radius:8px;overflow-x:auto"
 >{session.session_token}</pre>
 <p>Pull in your real library, then analyse it:</p>
@@ -260,6 +274,75 @@ async def spotify_callback(
         code=payload.code,
         code_verifier=payload.code_verifier,
         redirect_uri=payload.redirect_uri or settings.spotify_redirect_uri,
+    )
+
+
+# --------------------------------------------------------------------------
+# Device pairing.
+#
+# Signing in from inside the app on a phone is the awkward case. Spotify needs a
+# redirect URI it recognises, and in Expo Go that's `exp://<lan-ip>:8081/--/...`
+# -- it embeds the dev machine's IP, so it has to be registered and then
+# re-registered every time the network changes. The server-side browser login
+# can't help directly either: its redirect is a loopback literal, which on a
+# phone's browser means the phone itself.
+#
+# So: sign in on a laptop, then pair the phone with a short code. Six digits
+# typed on a phone beats a 43-character bearer token, and nothing needs
+# registering.
+# --------------------------------------------------------------------------
+
+# code -> (session_token, created_at). Single-node and in-process, like the PKCE
+# handshake store: this is a handoff measured in minutes, not a session.
+_PAIRING: dict[str, tuple[str, float]] = {}
+_PAIRING_TTL_SECONDS = 300
+
+
+def _sweep_pairings(now: float) -> None:
+    for code, (_, created) in list(_PAIRING.items()):
+        if now - created > _PAIRING_TTL_SECONDS:
+            _PAIRING.pop(code, None)
+
+
+def _issue_pairing_code(session_token: str) -> str:
+    now = time.time()
+    _sweep_pairings(now)
+    # Six digits: enough to make guessing pointless within a 5-minute window,
+    # short enough to type. secrets, not random, since it authorises a session.
+    for _ in range(20):
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        if code not in _PAIRING:
+            _PAIRING[code] = (session_token, now)
+            return code
+    raise HTTPException(status_code=503, detail="Could not allocate a pairing code")
+
+
+@router.post("/pair/claim", response_model=PairClaimResponse)
+def claim_pairing_code(payload: PairClaimRequest, db: Session = Depends(get_db)):
+    """Exchange a pairing code for the session token it was issued for."""
+    now = time.time()
+    _sweep_pairings(now)
+
+    # Single use: pop before validating anything else.
+    entry = _PAIRING.pop(payload.code.strip(), None)
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail="That code isn't valid (or has expired). Sign in again on your computer.",
+        )
+
+    session_token = entry[0]
+    user = db.execute(
+        select(User).where(User.session_token == session_token)
+    ).scalar_one_or_none()
+    if user is None:
+        # The session was revoked between pairing and claiming.
+        raise HTTPException(status_code=404, detail="That session is no longer valid")
+
+    return PairClaimResponse(
+        session_token=session_token,
+        display_name=user.display_name,
+        has_premium=user.has_premium,
     )
 
 

@@ -35,6 +35,16 @@ class AuthSessionResponse(BaseModel):
     playback_mode: str  # "spotify_remote" | "preview_fallback"
 
 
+class PairClaimRequest(BaseModel):
+    code: str = Field(..., min_length=4, max_length=12)
+
+
+class PairClaimResponse(BaseModel):
+    session_token: str
+    display_name: str | None
+    has_premium: bool
+
+
 class MeResponse(BaseModel):
     user_id: str
     display_name: str | None

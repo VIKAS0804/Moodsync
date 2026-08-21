@@ -146,7 +146,7 @@ Fill in `server/.env`:
   |---|---|---|
   | Browser login (`/auth/spotify/login`) | `http://127.0.0.1:8000/auth/spotify/callback` | Simplest; server-side flow |
   | The app on web | `http://127.0.0.1:8081/callback` | Open the app at `127.0.0.1:8081`, **not** `localhost` — different origins, and the PKCE verifier is per-origin |
-  | The app in Expo Go | `exp://<lan-ip>:8081/--/callback` | Embeds the dev machine's IP, so it changes with the network |
+  | The app in Expo Go | `exp://<lan-ip>:8081/--/callback` | Embeds the dev machine's IP, so it changes with the network. **Use device pairing instead** — see below |
   | Standalone build | `moodsync://callback` | Stable |
 
   The sign-in screen prints the exact redirect this build will use, and flags it when
@@ -159,6 +159,22 @@ Fill in `server/.env`:
   recording the user owns.
 
 Then sign in with Spotify in the app and hit **Sync library**.
+
+### Signing in on a phone
+
+In-app Spotify sign-in is the awkward path on a device: Expo Go's redirect URI
+embeds the dev machine's IP, so it has to be registered with Spotify and
+re-registered whenever the network changes. The server-side browser login can't
+stand in either — its redirect is a loopback literal, which on a phone's browser
+means the phone.
+
+So sign in on a computer and pair the phone:
+
+1. Open `http://127.0.0.1:8000/auth/spotify/login` on the computer running the API
+2. It shows a **6-digit code** (valid 5 minutes, single use)
+3. Type it into the app's *"Signed in on your computer?"* box
+
+Nothing to register, and it survives an IP change.
 
 ## The mood pipeline
 

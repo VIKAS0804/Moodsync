@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { API_BASE_URL, describeError } from '@/api/client';
-import { useLogin, useMe, useMoodMatch, useSession } from '@/api/hooks';
+import { useLogin, useMe, useMoodMatch, usePairDevice, useSession } from '@/api/hooks';
 import type { MoodMatch } from '@/api/types';
 import { MoodSlider } from '@/components/MoodSlider';
 import { PlaybackToggle } from '@/components/PlaybackToggle';
@@ -141,6 +141,8 @@ function SignIn({
   const [demoPending, setDemoPending] = useState(false);
   const [showPaste, setShowPaste] = useState(false);
   const [token, setToken] = useState('');
+  const [code, setCode] = useState('');
+  const pair = usePairDevice();
   const session = useSession();
   const redirectUri = spotifyRedirectUri();
   const redirectProblem = redirectUriProblem(redirectUri);
@@ -205,9 +207,47 @@ function SignIn({
         network. Signing in at <api>/auth/spotify/login instead does the whole
         flow server-side and prints a session token; this is where it goes.
       */}
-      <Pressable onPress={() => setShowPaste((v) => !v)} className="mt-6 py-2">
+      {/*
+        Pairing exists because in-app Spotify sign-in is the awkward path on a
+        phone: Expo Go's redirect embeds the LAN IP, so it must be registered
+        and re-registered as the network changes. Six digits needs nothing.
+      */}
+      <View className="mt-8 w-full rounded-xl border border-ink-600 bg-ink-800/40 p-4">
+        <Text className="text-center text-xs font-semibold text-slate-300">
+          Signed in on your computer?
+        </Text>
+        <Text className="mt-1 text-center text-[10px] text-slate-500">
+          Enter the 6-digit code from {API_BASE_URL}/auth/spotify/login
+        </Text>
+        <TextInput
+          value={code}
+          onChangeText={(t) => setCode(t.replace(/[^0-9]/g, '').slice(0, 6))}
+          placeholder="000000"
+          placeholderTextColor="#475569"
+          keyboardType="number-pad"
+          maxLength={6}
+          className="mt-3 w-full rounded-xl border border-ink-600 bg-ink-900 py-3 text-center font-mono text-2xl tracking-[8px] text-slate-100"
+        />
+        <Pressable
+          onPress={() => pair.mutate(code)}
+          disabled={code.length < 6 || pair.isPending}
+          className="mt-2 w-full items-center rounded-xl bg-slate-200 py-3 active:opacity-80"
+          accessibilityRole="button"
+        >
+          <Text className="font-semibold text-slate-900">
+            {pair.isPending ? 'Pairing…' : 'Pair this device'}
+          </Text>
+        </Pressable>
+        {pair.error ? (
+          <Text className="mt-2 text-center text-[11px] text-rose-400">
+            {describeError(pair.error)}
+          </Text>
+        ) : null}
+      </View>
+
+      <Pressable onPress={() => setShowPaste((v) => !v)} className="mt-4 py-2">
         <Text className="text-center text-xs text-slate-500">
-          {showPaste ? 'Hide' : 'Already signed in on the web? Paste a session token'}
+          {showPaste ? 'Hide' : 'Or paste a session token'}
         </Text>
       </Pressable>
 

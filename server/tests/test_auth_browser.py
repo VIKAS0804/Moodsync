@@ -122,3 +122,51 @@ def test_expired_handshakes_are_evicted(client, configured_spotify, monkeypatch)
     monkeypatch.setattr(auth.time, "time", lambda: 1_000.0 + auth._PENDING_TTL_SECONDS + 1)
     client.get("/auth/spotify/login", follow_redirects=False)
     assert "stale-state" not in auth._PENDING
+
+
+# ------------------------------------------------------------------ pairing
+
+
+def test_pairing_code_exchanges_for_the_session(client, db, seeded_user):
+    code = auth._issue_pairing_code(seeded_user.session_token)
+
+    body = client.post("/auth/pair/claim", json={"code": code}).json()
+    assert body["session_token"] == seeded_user.session_token
+    assert body["display_name"] == seeded_user.display_name
+    assert body["has_premium"] is True
+
+
+def test_pairing_code_is_single_use(client, db, seeded_user):
+    code = auth._issue_pairing_code(seeded_user.session_token)
+    assert client.post("/auth/pair/claim", json={"code": code}).status_code == 200
+    # A code left lying around on a screen must not stay usable.
+    assert client.post("/auth/pair/claim", json={"code": code}).status_code == 404
+
+
+def test_unknown_pairing_code_is_rejected(client):
+    response = client.post("/auth/pair/claim", json={"code": "424242"})
+    assert response.status_code == 404
+    assert "computer" in response.json()["detail"]
+
+
+def test_expired_pairing_codes_are_swept(client, db, seeded_user, monkeypatch):
+    auth._PAIRING.clear()
+    monkeypatch.setattr(auth.time, "time", lambda: 5_000.0)
+    code = auth._issue_pairing_code(seeded_user.session_token)
+
+    monkeypatch.setattr(auth.time, "time", lambda: 5_000.0 + auth._PAIRING_TTL_SECONDS + 1)
+    assert client.post("/auth/pair/claim", json={"code": code}).status_code == 404
+
+
+def test_pairing_a_revoked_session_fails(client, db, seeded_user):
+    """A code outliving its session must not resurrect it."""
+    code = auth._issue_pairing_code(seeded_user.session_token)
+    seeded_user.session_token = None
+    db.commit()
+
+    assert client.post("/auth/pair/claim", json={"code": code}).status_code == 404
+
+
+def test_pairing_codes_are_six_digits(db, seeded_user):
+    code = auth._issue_pairing_code(seeded_user.session_token)
+    assert len(code) == 6 and code.isdigit()
