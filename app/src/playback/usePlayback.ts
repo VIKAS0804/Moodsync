@@ -20,7 +20,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api } from '@/api/client';
 import type { MoodMatch } from '@/api/types';
-import { pauseSpotify, playViaSpotify } from '@/playback/spotify';
+import {
+  appRemoteAvailable,
+  openInSpotifyApp,
+  pauseSpotify,
+  playViaAppRemote,
+} from '@/playback/spotify';
 import {
   activateWebPlayerElement,
   connectWebPlayer,
@@ -287,7 +292,12 @@ export function usePlayback(options: PlaybackOptions = {}) {
         return;
       }
 
-      const wantsFull = preference === 'full' || match.playback_mode === 'spotify_remote';
+      // Full playback that keeps the listener *here*: the web SDK, or App
+      // Remote on a dev build. `auto` may only ever use these.
+      const inAppFullAvailable = webPlaybackSupported || appRemoteAvailable();
+      const wantsFull =
+        preference === 'full' ||
+        (match.playback_mode === 'spotify_remote' && inAppFullAvailable);
 
       if (wantsFull) {
         const started = await tryWebPlayer(match);
@@ -297,26 +307,36 @@ export function usePlayback(options: PlaybackOptions = {}) {
           return;
         }
         if (started) return;
-      }
 
-      if (wantsFull) {
-        const result = await playViaSpotify(match.track.spotify_uri);
-        if (superseded()) return;
-        if (result !== 'failed') {
+        if (await playViaAppRemote(match.track.spotify_uri)) {
+          if (superseded()) return;
           setRoute({
-            route: result === 'remote' ? 'spotify_remote' : 'spotify_deep_link',
+            route: 'spotify_remote',
             isPlaying: true,
-            // A deep link hands the screen to Spotify; we can't observe it.
-            seekable: result === 'remote',
-            degradedReason:
-              result === 'deep_link'
-                ? 'Playing in the Spotify app — come back to keep sliding.'
-                : null,
+            seekable: true,
+            degradedReason: null,
             positionMs: 0,
             durationMs: match.track.duration_ms ?? 0,
           });
           return;
         }
+      }
+
+      // Leaving the app is only ever an explicit choice. On `auto` we would
+      // rather play 30 seconds in-app than throw the listener into Spotify,
+      // where the slider -- the entire product -- is unreachable.
+      if (preference === 'full' && (await openInSpotifyApp(match.track.spotify_uri))) {
+        if (superseded()) return;
+        setRoute({
+          route: 'spotify_deep_link',
+          isPlaying: true,
+          // Spotify owns playback now; we can neither observe nor control it.
+          seekable: false,
+          degradedReason: 'Playing in the Spotify app — come back to keep sliding.',
+          positionMs: 0,
+          durationMs: match.track.duration_ms ?? 0,
+        });
+        return;
       }
 
       // Be specific about *why*, because the three causes need different
@@ -332,9 +352,11 @@ export function usePlayback(options: PlaybackOptions = {}) {
           ? `Spotify: ${webErrorRef.current} — playing a 30s preview.`
           : "Spotify wouldn't start the full track — playing a 30s preview.";
       } else {
+        // Not a failure: on a phone this is the better default, because the
+        // alternative is leaving the app for every track.
         reason =
-          'Full tracks need the Spotify app on this device (in-app playback ' +
-          'needs a development build) — playing a 30s preview.';
+          'Playing 30s previews so you can keep sliding. ' +
+          'Pick Full song to hand a track to the Spotify app.';
       }
 
       if (match.preview_url) {

@@ -63,34 +63,48 @@ export async function isSpotifyInstalled(): Promise<boolean> {
   }
 }
 
+/** Whether full playback can happen *without* leaving the app. */
+export const appRemoteAvailable = () => Platform.OS !== 'web' && loadRemote() !== null;
+
 /**
- * Try to play a full track through Spotify. Returns how it was handled so the
- * caller can decide whether to fall back to the preview.
+ * Play a full track through the App Remote SDK, in-app.
+ *
+ * Returns false when the native module isn't present, which is always the case
+ * in Expo Go. Kept separate from the deep link on purpose: one keeps the
+ * listener here, the other doesn't, and they are not interchangeable.
  */
-export async function playViaSpotify(uri: string): Promise<'remote' | 'deep_link' | 'failed'> {
-  if (Platform.OS === 'web') return 'failed';
-
+export async function playViaAppRemote(uri: string): Promise<boolean> {
   const remote = loadRemote();
-  if (remote) {
-    try {
-      if (!(await remote.isConnectedAsync())) {
-        await remote.connectRemote();
-      }
-      await remote.playUri(uri);
-      return 'remote';
-    } catch {
-      // Fall through to the deep link rather than failing outright.
+  if (!remote) return false;
+  try {
+    if (!(await remote.isConnectedAsync())) {
+      await remote.connectRemote();
     }
+    await remote.playUri(uri);
+    return true;
+  } catch {
+    return false;
   }
+}
 
-  // Attempt the open rather than asking permission first. `openURL` is not
-  // subject to the LSApplicationQueriesSchemes restriction that makes
-  // `canOpenURL` lie inside Expo Go, and it fails cleanly if Spotify is absent.
+/**
+ * Hand the track to the Spotify app.
+ *
+ * This *leaves MoodSync*, which is why it is never used automatically: the whole
+ * product is nudging a slider mid-song, and you can't do that from inside
+ * Spotify. Only an explicit "Full song" request may end up here.
+ *
+ * Attempts the open rather than asking permission first -- `openURL` isn't
+ * subject to the LSApplicationQueriesSchemes restriction that makes
+ * `canOpenURL` lie inside Expo Go, and it fails cleanly if Spotify is absent.
+ */
+export async function openInSpotifyApp(uri: string): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
   try {
     await Linking.openURL(uri);
-    return 'deep_link';
+    return true;
   } catch {
-    return 'failed';
+    return false;
   }
 }
 

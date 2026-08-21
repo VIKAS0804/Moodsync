@@ -319,7 +319,14 @@ still uses the server's copy.
 
 On a phone in Expo Go there is no in-app full playback: the Web Playback SDK has
 no React Native build and the App Remote SDK needs a development build, so
-**Full song** deep-links into the Spotify app. Note that `Linking.canOpenURL`
+**Full song** deep-links into the Spotify app.
+
+**`auto` never deep-links.** Leaving for Spotify costs the slider, and the
+slider is the product — nudging mid-song is the entire interaction. So `auto`
+only uses full playback that stays in-app (web SDK, or App Remote on a dev
+build) and otherwise plays a preview; the deep link is reserved for an explicit
+**Full song**. The toggle says which it'll be, per platform, rather than letting
+it be a surprise. Note that `Linking.canOpenURL`
 can't be used to detect Spotify there — it only answers truthfully for schemes in
 the app's own `LSApplicationQueriesSchemes`, and Expo Go runs under its own
 Info.plist, so it reports "not installed" regardless. Attempt `openURL` instead;
