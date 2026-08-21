@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import AppleCatalogMap, MoodScore, Track, User, UserTrack  # noqa: E402
+from app.models import Session as DeviceSession  # noqa: E402
 
 SESSION_TOKEN = "test-session-token"
 
@@ -60,9 +61,10 @@ def seeded_user(db):
         spotify_user_id="test-user",
         display_name="Test User",
         product="premium",
-        session_token=SESSION_TOKEN,
     )
     db.add(user)
+    db.flush()
+    db.add(DeviceSession(token=SESSION_TOKEN, user_id=user.id, device_label="tests"))
     db.commit()
 
     for index, score in enumerate(range(5, 100, 10)):  # 5, 15, ... 95

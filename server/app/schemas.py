@@ -24,6 +24,8 @@ class AuthCallbackRequest(BaseModel):
     code: str = Field(..., description="Authorization code from the Spotify redirect")
     code_verifier: str = Field(..., description="PKCE verifier generated on the device")
     redirect_uri: str | None = None
+    # Only for telling devices apart in the session list.
+    device_label: str | None = Field(None, max_length=64)
 
 
 class AuthSessionResponse(BaseModel):
@@ -48,6 +50,17 @@ class PairClaimResponse(BaseModel):
     session_token: str
     display_name: str | None
     has_premium: bool
+
+
+class SessionInfo(BaseModel):
+    device_label: str | None
+    created_at: datetime
+    last_used_at: datetime
+    is_current: bool
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionInfo]
 
 
 class MeResponse(BaseModel):

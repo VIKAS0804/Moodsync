@@ -43,9 +43,13 @@ def test_mood_honours_exclude_so_the_slider_does_not_repeat(client, auth_headers
 
 
 def test_mood_404s_on_an_empty_library(client, auth_headers, db):
+    from app.models import Session as DeviceSession
     from app.models import User
 
-    db.add(User(spotify_user_id="empty", product="free", session_token="test-session-token"))
+    user = User(spotify_user_id="empty", product="free")
+    db.add(user)
+    db.flush()
+    db.add(DeviceSession(token="test-session-token", user_id=user.id))
     db.commit()
 
     response = client.get("/mood/50", headers=auth_headers)

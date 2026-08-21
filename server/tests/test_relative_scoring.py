@@ -10,11 +10,14 @@ from __future__ import annotations
 
 from app import selection
 from app.models import MoodScore, Track, User, UserTrack
+from app.models import Session as DeviceSession
 
 
 def _library(db, scores: list[int], spotify_user_id="narrow", token="narrow-token") -> User:
-    user = User(spotify_user_id=spotify_user_id, product="free", session_token=token)
+    user = User(spotify_user_id=spotify_user_id, product="free")
     db.add(user)
+    db.flush()
+    db.add(DeviceSession(token=token, user_id=user.id))
     db.commit()
     for i, score in enumerate(scores):
         track = Track(
@@ -130,8 +133,10 @@ def test_unscoreable_tracks_leave_the_pending_queue(db):
     from app.models import AppleCatalogMap
     from app.pipeline.analyze import pending_tracks
 
-    user = User(spotify_user_id="pend", product="free", session_token="pend-token")
+    user = User(spotify_user_id="pend", product="free")
     db.add(user)
+    db.flush()
+    db.add(DeviceSession(token="pend-token", user_id=user.id))
     db.commit()
 
     for i, isrc in enumerate(["HASPREVIEW01", "NOPREVIEW001"]):

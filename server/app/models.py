@@ -56,8 +56,8 @@ class User(Base):
     refresh_token: Mapped[str | None] = mapped_column(Text)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    # Opaque bearer token the mobile app sends back to this API, so the Spotify
-    # access token never has to leave the server.
+    # Superseded by the `sessions` table. Kept only so an existing database
+    # keeps working; nothing reads it for auth any more.
     session_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -74,10 +74,40 @@ class User(Base):
     library: Mapped[list[UserTrack]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    sessions: Mapped[list[Session]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
     @property
     def has_premium(self) -> bool:
         return self.product == "premium"
+
+
+class Session(Base):
+    """One signed-in device.
+
+    This was originally a single `users.session_token` column, which made
+    sessions mutually exclusive: every login overwrote the previous token, so
+    signing in on a phone silently signed out the laptop. One row per device
+    instead, which is what anyone expects and what VibeScape's schema does.
+
+    Note this does *not* remove the need for the server to hold Spotify tokens.
+    Library sync and analysis keep running long after a request returns -- often
+    for an hour on a large library -- so the refresh token has to live somewhere
+    that isn't a device that may be asleep. Devices get their own short-lived
+    Spotify token for playback via /auth/spotify/playback-token.
+    """
+
+    __tablename__ = "sessions"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    # Free-text, from the client. Only for telling devices apart in a list.
+    device_label: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    user: Mapped[User] = relationship(back_populates="sessions")
 
 
 class Track(Base):

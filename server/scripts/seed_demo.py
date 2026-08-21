@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import secrets
 import sys
 from pathlib import Path
 
@@ -32,6 +31,7 @@ from app import selection  # noqa: E402
 from app.clients.itunes import ITunesClient  # noqa: E402
 from app.db import SessionLocal, init_db  # noqa: E402
 from app.models import AppleCatalogMap, MoodScore, Track, User, UserTrack  # noqa: E402
+from app.models import Session as DeviceSession  # noqa: E402
 from app.pipeline import scoring  # noqa: E402
 
 DEMO_USER_ID = "moodsync-demo"
@@ -123,8 +123,13 @@ def main() -> int:
             )
             db.add(user)
             db.commit()
-        else:
-            user.session_token = user.session_token or secrets.token_urlsafe(32)
+        # A stable session row so the app's demo button always works.
+        if db.get(DeviceSession, DEMO_SESSION_TOKEN) is None:
+            db.add(
+                DeviceSession(
+                    token=DEMO_SESSION_TOKEN, user_id=user.id, device_label="demo"
+                )
+            )
             db.commit()
 
         created = 0
@@ -191,7 +196,7 @@ def main() -> int:
         selection.refresh_score_stats(db, user)
 
         print(f"Seeded {len(DEMO_TRACKS)} tracks ({created} new) for user {user.display_name}")
-        print(f"\n  session token : {user.session_token}")
+        print(f"\n  session token : {DEMO_SESSION_TOKEN}")
         print(f"  user id       : {user.id}")
         print("\nTry it:")
         print(f'  curl -H "Authorization: Bearer {user.session_token}" localhost:8000/mood/85')

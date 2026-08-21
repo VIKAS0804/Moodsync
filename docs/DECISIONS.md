@@ -143,15 +143,48 @@ assumes the app is broken.
 
 ## 6. Auth
 
-**Decided: opaque server-issued bearer token; Spotify tokens never leave the server.**
+**Decided: one session row per device; the server keeps the Spotify refresh token.**
 
-The device runs PKCE and ships the code to the backend, which does the exchange, stores
-the Spotify token pair, and returns a token of its own. The refresh dance stays
-server-side.
+> **Correction.** The first version stored the session as a single
+> `users.session_token` column. That made sessions mutually exclusive: every login
+> overwrote the column, so signing in on a phone silently signed out the laptop
+> and a working token would go dead with no explanation. It caused four separate
+> "Invalid session" incidents during testing before the cause was obvious.
+> `sessions` is now its own table, which is what VibeScape's `schema.sql` does —
+> noticed early and not adopted, which was the mistake.
 
-This is deliberately not a production identity system — no expiry, no rotation, and the
-Spotify tokens sit in plaintext in `users`. Both are noted in the README as things to
-fix before real users.
+Each device gets its own row, `/auth/logout` deletes only the calling device's
+session, `/auth/sessions` lists them, and `/auth/sessions/revoke-others` exists
+for when you want the blunt instrument.
+
+### Why the server still holds a Spotify token
+
+The obvious simplification is to let each device do its own Spotify OAuth and
+talk to Spotify directly, with the backend serving nothing but mood scores. It
+would remove pairing codes entirely. It doesn't work here, for one reason:
+`/sync` and analysis keep running long after the request returns — an hour on a
+large library — so a *refresh* token has to live somewhere that isn't a device
+that may be asleep or offline.
+
+So the split is deliberate:
+
+| Needs a token | Which token | Why |
+|---|---|---|
+| Library sync, analysis | server's refresh token | outlives any request |
+| Web Playback SDK, Spotify Connect | short-lived token from `/auth/spotify/playback-token` | the SDK authenticates itself in the browser |
+
+The "Spotify tokens never leave the server" line in the original entry was
+already false once the Web Playback SDK landed — the SDK cannot work without a
+client-side token. Better to state the split than to claim an invariant the code
+doesn't keep.
+
+Device pairing is not part of this design; it's an Expo Go workaround. In Expo Go
+the OAuth redirect is `exp://<lan-ip>:8081/--/callback`, which embeds the dev
+machine's IP and changes with the network. A standalone build gets a stable
+`moodsync://callback` and can do PKCE on-device with no pairing at all.
+
+Still not a production identity system: no session expiry, and the Spotify tokens
+sit in plaintext in `users`. Both are in the README's known limits.
 
 ---
 

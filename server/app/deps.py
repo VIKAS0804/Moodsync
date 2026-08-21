@@ -6,12 +6,12 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, Header, HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.clients.spotify import SpotifyClient, SpotifyError
 from app.config import Settings, get_settings
 from app.db import get_db
+from app.models import Session as DeviceSession
 from app.models import User
 
 log = logging.getLogger(__name__)
@@ -33,10 +33,31 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = authorization.split(" ", 1)[1].strip()
-    user = db.execute(select(User).where(User.session_token == token)).scalar_one_or_none()
+    session = db.get(DeviceSession, token)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+
+    # Cheap liveness signal, so the session list can say which device is current.
+    session.last_used_at = datetime.now(UTC)
+    db.commit()
+
+    user = db.get(User, session.user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
     return user
+
+
+def get_current_session(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> DeviceSession:
+    """The specific device session, for operations scoped to one device."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+    session = db.get(DeviceSession, authorization.split(" ", 1)[1].strip())
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+    return session
 
 
 async def spotify_access_token(user: User, db: Session, settings: Settings) -> str:

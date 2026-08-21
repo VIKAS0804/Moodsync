@@ -491,6 +491,8 @@ track instead of searching near 95 and finding nothing.
   a model change run `python scripts/dev_sync_schema.py --apply` to add new
   columns to an existing database. It is additive-only — Alembic is the real
   answer once the schema settles.
+- Sessions never expire. They're per-device rows, revocable individually or via
+  `/auth/sessions/revoke-others`, but nothing ages them out.
 - OAuth tokens are stored in plaintext in `users`. They need envelope encryption
   (KMS) before this goes near real users.
 - Session auth is an opaque bearer token, deliberately simple. It is not a

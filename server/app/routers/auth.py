@@ -21,14 +21,20 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.clients.spotify import SpotifyClient, SpotifyError
 from app.config import Settings
 from app.db import get_db
-from app.deps import get_current_user, settings_dep, spotify_access_token
+from app.deps import (
+    get_current_session,
+    get_current_user,
+    settings_dep,
+    spotify_access_token,
+)
 from app.models import MoodScore, User, UserTrack
+from app.models import Session as DeviceSession
 from app.schemas import (
     AuthCallbackRequest,
     AuthSessionResponse,
@@ -36,6 +42,8 @@ from app.schemas import (
     PairClaimRequest,
     PairClaimResponse,
     PairCodeResponse,
+    SessionInfo,
+    SessionListResponse,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -173,6 +181,7 @@ async def spotify_callback_browser(
         code=code,
         code_verifier=entry[0],
         redirect_uri=settings.spotify_web_redirect_uri,
+        device_label="browser",
     )
 
     pairing_code = _issue_pairing_code(session.session_token)
@@ -212,6 +221,7 @@ async def _establish_session(
     code: str,
     code_verifier: str,
     redirect_uri: str,
+    device_label: str | None = None,
 ) -> AuthSessionResponse:
     """Exchange an authorization code, upsert the user, issue a session token.
 
@@ -246,12 +256,22 @@ async def _establish_session(
     user.access_token = tokens.access_token
     user.refresh_token = tokens.refresh_token or user.refresh_token
     user.token_expires_at = datetime.now(UTC) + timedelta(seconds=tokens.expires_in)
-    user.session_token = secrets.token_urlsafe(32)
+    db.flush()
+
+    # A new device session. Existing sessions are left alone -- signing in on a
+    # phone must not sign out the laptop, which is exactly what the old
+    # single-token-per-user design did.
+    session = DeviceSession(
+        token=secrets.token_urlsafe(32),
+        user_id=user.id,
+        device_label=device_label,
+    )
+    db.add(session)
     db.commit()
     db.refresh(user)
 
     return AuthSessionResponse(
-        session_token=user.session_token,
+        session_token=session.token,
         user_id=user.id,
         display_name=user.display_name,
         product=user.product,
@@ -275,6 +295,7 @@ async def spotify_callback(
         code=payload.code,
         code_verifier=payload.code_verifier,
         redirect_uri=payload.redirect_uri or settings.spotify_redirect_uri,
+        device_label=payload.device_label,
     )
 
 
@@ -319,17 +340,17 @@ def _issue_pairing_code(session_token: str) -> str:
 
 
 @router.post("/pair/new", response_model=PairCodeResponse)
-def create_pairing_code(user: User = Depends(get_current_user)) -> PairCodeResponse:
+def create_pairing_code(
+    session: DeviceSession = Depends(get_current_session),
+) -> PairCodeResponse:
     """Mint a pairing code for an already-signed-in session.
 
     Without this the only way to get a code is to complete the browser login
     again -- and that rotates the session token, logging out whichever device
     was already using it. Pairing a second device shouldn't cost you the first.
     """
-    if not user.session_token:
-        raise HTTPException(status_code=401, detail="This session has been signed out")
     return PairCodeResponse(
-        code=_issue_pairing_code(user.session_token),
+        code=_issue_pairing_code(session.token),
         expires_in=_PAIRING_TTL_SECONDS,
     )
 
@@ -349,11 +370,12 @@ def claim_pairing_code(payload: PairClaimRequest, db: Session = Depends(get_db))
         )
 
     session_token = entry[0]
-    user = db.execute(
-        select(User).where(User.session_token == session_token)
-    ).scalar_one_or_none()
+    session = db.get(DeviceSession, session_token)
+    if session is None:
+        # Signed out between pairing and claiming.
+        raise HTTPException(status_code=404, detail="That session is no longer valid")
+    user = db.get(User, session.user_id)
     if user is None:
-        # The session was revoked between pairing and claiming.
         raise HTTPException(status_code=404, detail="That session is no longer valid")
 
     return PairClaimResponse(
@@ -406,9 +428,48 @@ async def spotify_playback_token(
 
 @router.post("/logout", status_code=204)
 def logout(
-    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    session: DeviceSession = Depends(get_current_session), db: Session = Depends(get_db)
 ) -> None:
-    user.session_token = None
+    """Sign out *this* device only, leaving other devices signed in."""
+    db.delete(session)
+    db.commit()
+
+
+@router.get("/sessions", response_model=SessionListResponse)
+def list_sessions(
+    current: DeviceSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> SessionListResponse:
+    """Every signed-in device, so it's visible that they coexist."""
+    rows = db.execute(
+        select(DeviceSession)
+        .where(DeviceSession.user_id == current.user_id)
+        .order_by(DeviceSession.last_used_at.desc())
+    ).scalars().all()
+    return SessionListResponse(
+        sessions=[
+            SessionInfo(
+                device_label=r.device_label,
+                created_at=r.created_at,
+                last_used_at=r.last_used_at,
+                is_current=r.token == current.token,
+            )
+            for r in rows
+        ]
+    )
+
+
+@router.post("/sessions/revoke-others", status_code=204)
+def revoke_other_sessions(
+    current: DeviceSession = Depends(get_current_session),
+    db: Session = Depends(get_db),
+) -> None:
+    """Sign out everything except this device."""
+    db.execute(
+        delete(DeviceSession).where(
+            DeviceSession.user_id == current.user_id, DeviceSession.token != current.token
+        )
+    )
     db.commit()
 
 

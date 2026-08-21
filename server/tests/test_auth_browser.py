@@ -11,7 +11,9 @@ import pytest
 from app.config import Settings
 from app.deps import settings_dep
 from app.main import app
+from app.models import Session as DeviceSession
 from app.routers import auth
+from tests.conftest import SESSION_TOKEN
 
 
 @pytest.fixture
@@ -128,16 +130,16 @@ def test_expired_handshakes_are_evicted(client, configured_spotify, monkeypatch)
 
 
 def test_pairing_code_exchanges_for_the_session(client, db, seeded_user):
-    code = auth._issue_pairing_code(seeded_user.session_token)
+    code = auth._issue_pairing_code(SESSION_TOKEN)
 
     body = client.post("/auth/pair/claim", json={"code": code}).json()
-    assert body["session_token"] == seeded_user.session_token
+    assert body["session_token"] == SESSION_TOKEN
     assert body["display_name"] == seeded_user.display_name
     assert body["has_premium"] is True
 
 
 def test_pairing_code_is_single_use(client, db, seeded_user):
-    code = auth._issue_pairing_code(seeded_user.session_token)
+    code = auth._issue_pairing_code(SESSION_TOKEN)
     assert client.post("/auth/pair/claim", json={"code": code}).status_code == 200
     # A code left lying around on a screen must not stay usable.
     assert client.post("/auth/pair/claim", json={"code": code}).status_code == 404
@@ -152,7 +154,7 @@ def test_unknown_pairing_code_is_rejected(client):
 def test_expired_pairing_codes_are_swept(client, db, seeded_user, monkeypatch):
     auth._PAIRING.clear()
     monkeypatch.setattr(auth.time, "time", lambda: 5_000.0)
-    code = auth._issue_pairing_code(seeded_user.session_token)
+    code = auth._issue_pairing_code(SESSION_TOKEN)
 
     monkeypatch.setattr(auth.time, "time", lambda: 5_000.0 + auth._PAIRING_TTL_SECONDS + 1)
     assert client.post("/auth/pair/claim", json={"code": code}).status_code == 404
@@ -160,21 +162,21 @@ def test_expired_pairing_codes_are_swept(client, db, seeded_user, monkeypatch):
 
 def test_pairing_a_revoked_session_fails(client, db, seeded_user):
     """A code outliving its session must not resurrect it."""
-    code = auth._issue_pairing_code(seeded_user.session_token)
-    seeded_user.session_token = None
+    code = auth._issue_pairing_code(SESSION_TOKEN)
+    db.delete(db.get(DeviceSession, SESSION_TOKEN))
     db.commit()
 
     assert client.post("/auth/pair/claim", json={"code": code}).status_code == 404
 
 
 def test_pairing_codes_are_six_digits(db, seeded_user):
-    code = auth._issue_pairing_code(seeded_user.session_token)
+    code = auth._issue_pairing_code(SESSION_TOKEN)
     assert len(code) == 6 and code.isdigit()
 
 
 def test_signed_in_session_can_mint_a_pairing_code(client, db, seeded_user):
     """Pairing a second device must not cost you the first."""
-    original = seeded_user.session_token
+    original = SESSION_TOKEN
 
     body = client.post("/auth/pair/new", headers={"Authorization": f"Bearer {original}"}).json()
     assert len(body["code"]) == 6
@@ -183,8 +185,7 @@ def test_signed_in_session_can_mint_a_pairing_code(client, db, seeded_user):
     # The code resolves to the *same* session, unrotated.
     claimed = client.post("/auth/pair/claim", json={"code": body["code"]}).json()
     assert claimed["session_token"] == original
-    db.refresh(seeded_user)
-    assert seeded_user.session_token == original
+    assert db.get(DeviceSession, original) is not None
 
 
 def test_minting_a_pairing_code_requires_a_session(client):
