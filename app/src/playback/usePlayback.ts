@@ -78,8 +78,19 @@ async function fetchPlaybackToken(): Promise<string> {
   return response.data.access_token;
 }
 
-export function usePlayback() {
+export interface PlaybackOptions {
+  /**
+   * Called when a track finishes on its own, for auto-advance. Held in a ref so
+   * a changing callback doesn't force the audio listeners to be torn down and
+   * rebuilt mid-track.
+   */
+  onEnded?: () => void;
+}
+
+export function usePlayback(options: PlaybackOptions = {}) {
   const playerRef = useRef<AudioPlayer | null>(null);
+  const onEndedRef = useRef(options.onEnded);
+  onEndedRef.current = options.onEnded;
   const [state, setState] = useState<PlaybackState>(INITIAL);
   const routeRef = useRef<PlaybackRoute>('none');
   /**
@@ -88,6 +99,8 @@ export function usePlayback() {
    * older one must abandon rather than also start audio.
    */
   const epochRef = useRef(0);
+  /** Last seen web-player progress, for telling "ended" from "paused". */
+  const webProgressRef = useRef({ playing: false, positionMs: 0 });
 
   const setRoute = (next: Partial<PlaybackState>) => {
     if (next.route) routeRef.current = next.route;
@@ -96,7 +109,12 @@ export function usePlayback() {
 
   useEffect(() => {
     // Keep playing when the phone is on silent -- this is a music app.
-    setAudioModeAsync({ playsInSilentMode: true }).catch(() => undefined);
+    // Silent mode: it's a music app. Background: the phone is in a pocket or a
+    // car mount, so locking the screen must not stop playback.
+    setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: true,
+    }).catch(() => undefined);
     return () => {
       playerRef.current?.remove();
       playerRef.current = null;
@@ -175,6 +193,11 @@ export function usePlayback() {
     (url: string, reason: string | null) => {
       const player = createAudioPlayer({ uri: url });
       playerRef.current = player;
+      // didJustFinish is the only reliable end signal: polling position against
+      // duration races the final buffer and can fire twice or not at all.
+      player.addListener('playbackStatusUpdate', (status) => {
+        if (status?.didJustFinish) onEndedRef.current?.();
+      });
       player.play();
       setRoute({
         route: 'preview',
@@ -200,6 +223,17 @@ export function usePlayback() {
       if (!webPlayerReady()) {
         await connectWebPlayer(fetchPlaybackToken, (s) => {
           if (!s) return;
+          // A finished track surfaces as paused at position 0, which is
+          // otherwise indistinguishable from a manual pause -- so require that
+          // we were playing and had actually got somewhere first.
+          const wasPlaying = webProgressRef.current.playing;
+          const hadProgress = webProgressRef.current.positionMs > 1000;
+          if (s.paused && s.positionMs === 0 && wasPlaying && hadProgress) {
+            webProgressRef.current = { playing: false, positionMs: 0 };
+            onEndedRef.current?.();
+            return;
+          }
+          webProgressRef.current = { playing: !s.paused, positionMs: s.positionMs };
           setState((prev) => ({
             ...prev,
             positionMs: s.positionMs,

@@ -26,6 +26,8 @@ export interface MediaSessionHandlers {
   onPause?: () => void;
   /** "Next" means "another track at this mood", which is the app's real verb. */
   onNextTrack?: () => void;
+  /** "Previous" replays the last track, so a car button behaves as expected. */
+  onPreviousTrack?: () => void;
   onSeekBackward?: () => void;
   onSeekForward?: () => void;
   onSeekTo?: (positionMs: number) => void;
@@ -108,6 +110,7 @@ export function registerMediaSessionHandlers(handlers: MediaSessionHandlers): ()
   bind('play', handlers.onPlay);
   bind('pause', handlers.onPause);
   bind('nexttrack', handlers.onNextTrack);
+  bind('previoustrack', handlers.onPreviousTrack);
   bind('seekbackward', handlers.onSeekBackward);
   bind('seekforward', handlers.onSeekForward);
   bind('seekto', (details) => {
@@ -120,6 +123,7 @@ export function registerMediaSessionHandlers(handlers: MediaSessionHandlers): ()
       'play',
       'pause',
       'nexttrack',
+      'previoustrack',
       'seekbackward',
       'seekforward',
       'seekto',

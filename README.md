@@ -321,11 +321,26 @@ the app's own `LSApplicationQueriesSchemes`, and Expo Go runs under its own
 Info.plist, so it reports "not installed" regardless. Attempt `openURL` instead;
 it has no such restriction.
 
+**Auto-advance.** When a track ends, the next one at the current mood starts on
+its own — the brief's "auto-suggest the next track as the current one ends".
+Detected from `didJustFinish` for previews and from Spotify's own state changes
+for full tracks; polling position against duration races the final buffer and
+fires twice or not at all.
+
+**Real transport.** Previous replays the track you just heard, from a history
+stack, rather than re-rolling a new one — a back button that doesn't go back
+isn't a back button. Next walks forward through that history if you've gone back,
+and only fetches a new track once you're at the end. The same history supplies
+the `exclude` ids sent to `/mood/{score}`.
+
+**Background playback.** `shouldPlayInBackground` keeps audio going with the
+screen locked, which is the whole point on a phone in a pocket or a car mount.
+
 **OS-level controls.** On web, the Media Session API puts the track on the lock
 screen and wires up Bluetooth, steering-wheel and AirPods buttons — for an app
 built for driving and the gym, not having to look at the screen is the point.
 "Next" is bound to "another track at this mood", which is the app's real verb.
-Keyboard transport too: space, arrows to seek, `N` for another track.
+Keyboard transport too: space, arrows to seek, `N` next, `P` previous.
 
 A listener can also *choose*: **Auto / Full song / 30s**. Preview isn't only a
 fallback — it keeps playback inside MoodSync instead of handing the screen to
@@ -407,12 +422,13 @@ track instead of searching near 95 and finding nothing.
 - [x] **Phase 3** — Expo slider UI against the real endpoint
 - [x] **Phase 4** — Spotify OAuth + playback handoff (deep link; App Remote SDK needs a dev client)
 - [x] **Phase 5** — preview fallback, error/loading states, background sync
+- [x] Auto-advance, history-backed previous/next, background + OS media controls
+- [x] Human corrections feeding a trainable model
 - [ ] Measure real ISRC match rate over a full library
 - [ ] Library-relative (z-scored) scores, so the whole slider is usable regardless
       of a user's taste
 - [ ] Promote valence to a second axis (calm/tense as well as calm/hyper)
 - [ ] Train a regression on a public audio-features dataset to replace the heuristic
-- [ ] Auto-advance to the next track as the current one ends
 
 ## Notes / known limits
 

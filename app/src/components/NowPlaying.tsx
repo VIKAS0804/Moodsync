@@ -30,6 +30,9 @@ interface Props {
   /** Correct this track's mood score. */
   onLabel: (score: number) => void;
   labelPending: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+  canGoBack: boolean;
 }
 
 export function NowPlaying({
@@ -48,6 +51,9 @@ export function NowPlaying({
   onNudge,
   onLabel,
   labelPending,
+  onPrevious,
+  onNext,
+  canGoBack,
 }: Props) {
   if (loading && !match) {
     return (
@@ -125,6 +131,9 @@ export function NowPlaying({
           onTogglePlay={onTogglePlay}
           onSeek={onSeek}
           onNudge={onNudge}
+          onPrevious={onPrevious}
+          onNext={onNext}
+          canGoBack={canGoBack}
         />
       </View>
 

@@ -18,6 +18,10 @@ interface Props {
   onTogglePlay: () => void;
   onSeek: (positionMs: number) => void;
   onNudge: (deltaMs: number) => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  /** False at the start of history, so Previous isn't offered with nothing behind it. */
+  canGoBack: boolean;
 }
 
 /**
@@ -36,6 +40,9 @@ export function TransportBar({
   onTogglePlay,
   onSeek,
   onNudge,
+  onPrevious,
+  onNext,
+  canGoBack,
 }: Props) {
   const dim = seekable ? colour : '#475569';
   const known = durationMs > 0;
@@ -62,7 +69,19 @@ export function TransportBar({
         </Text>
       </View>
 
-      <View className="mt-2 flex-row items-center justify-center gap-4">
+      <View className="mt-2 flex-row items-center justify-center gap-3">
+        <Pressable
+          onPress={onPrevious}
+          disabled={!canGoBack}
+          className="rounded-lg border border-ink-600 px-3 py-2 active:opacity-70"
+          accessibilityRole="button"
+          accessibilityLabel="Previous track"
+        >
+          <Text className={canGoBack ? 'text-sm text-slate-300' : 'text-sm text-slate-700'}>
+            ⏮
+          </Text>
+        </Pressable>
+
         <Pressable
           onPress={() => onNudge(-10_000)}
           disabled={!seekable}
@@ -97,6 +116,15 @@ export function TransportBar({
           <Text className={seekable ? 'text-xs text-slate-300' : 'text-xs text-slate-600'}>
             +10s
           </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={onNext}
+          className="rounded-lg border border-ink-600 px-3 py-2 active:opacity-70"
+          accessibilityRole="button"
+          accessibilityLabel="Next track"
+        >
+          <Text className="text-sm text-slate-300">⏭</Text>
         </Pressable>
       </View>
     </View>

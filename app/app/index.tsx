@@ -19,6 +19,7 @@ import { NowPlaying } from '@/components/NowPlaying';
 import { redirectUriProblem, setSessionToken, spotifyRedirectUri } from '@/auth/session';
 import { moodTheme } from '@/lib/mood';
 import { usePlayback, type PlaybackPreference } from '@/playback/usePlayback';
+import { useTrackHistory } from '@/playback/useTrackHistory';
 import { activateWebPlayerElement } from '@/playback/webSpotify';
 import {
   registerMediaSessionHandlers,
@@ -27,36 +28,38 @@ import {
   setMediaSessionTrack,
 } from '@/playback/mediaSession';
 
-/** Keep the last few picks out of the pool so the slider doesn't loop. */
-const RECENT_MEMORY = 5;
-
 export default function MoodScreen() {
   const insets = useSafeAreaInsets();
   const [score, setScore] = useState(50);
   const [match, setMatch] = useState<MoodMatch | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preference, setPreference] = useState<PlaybackPreference>('auto');
-  const recent = useRef<string[]>([]);
+  const history = useTrackHistory();
   // Handlers are registered once but must read the *current* slider position.
   const scoreRef = useRef(50);
   scoreRef.current = score;
+  // Auto-advance needs the newest requestTrack without re-registering audio
+  // listeners on every render.
+  const advanceRef = useRef<() => void>(() => undefined);
 
   const session = useSession();
   const me = useMe(Boolean(session.data));
   const login = useLogin();
   const moodMatch = useMoodMatch();
-  const playback = usePlayback();
+  // When a track finishes, keep going at the current mood -- that's the brief's
+  // "auto-suggest the next track as the current one ends".
+  const playback = usePlayback({ onEnded: () => advanceRef.current() });
   const label = useLabelTrack();
 
   const requestTrack = useCallback(
     async (target: number) => {
       setError(null);
       try {
-        const result = await moodMatch.mutateAsync({ score: target, exclude: recent.current });
-        recent.current = [result.track.spotify_track_id, ...recent.current].slice(
-          0,
-          RECENT_MEMORY,
-        );
+        const result = await moodMatch.mutateAsync({
+          score: target,
+          exclude: history.recentIds(),
+        });
+        history.push(result);
         setMatch(result);
         await playback.play(result, preference);
       } catch (err) {
@@ -64,8 +67,29 @@ export default function MoodScreen() {
         setMatch(null);
       }
     },
-    [moodMatch, playback, preference],
+    [history, moodMatch, playback, preference],
   );
+
+  /** Replay the previous track, or do nothing at the start of history. */
+  const goPrevious = useCallback(() => {
+    const previous = history.back();
+    if (!previous) return;
+    setMatch(previous);
+    void playback.play(previous, preference);
+  }, [history, playback, preference]);
+
+  /** Forward through history if we went back, else a new track at this mood. */
+  const goNext = useCallback(() => {
+    const ahead = history.forward();
+    if (ahead) {
+      setMatch(ahead);
+      void playback.play(ahead, preference);
+      return;
+    }
+    void requestTrack(scoreRef.current);
+  }, [history, playback, preference, requestTrack]);
+
+  advanceRef.current = goNext;
 
   // Keep the OS-level controls in step with what's actually playing, so the
   // lock screen and Bluetooth buttons stay usable without looking at the phone.
@@ -93,12 +117,13 @@ export default function MoodScreen() {
         onPlay: () => playback.resume(),
         onPause: () => playback.pause(),
         // "Next" means another track at this mood -- the app's actual verb.
-        onNextTrack: () => requestTrack(scoreRef.current),
+        onNextTrack: () => goNext(),
+        onPreviousTrack: () => goPrevious(),
         onSeekBackward: () => playback.nudge(-10_000),
         onSeekForward: () => playback.nudge(10_000),
         onSeekTo: (ms) => playback.seekTo(ms),
       }),
-    [playback, requestTrack],
+    [goNext, goPrevious, playback],
   );
 
   // Keyboard transport on web: space to toggle, arrows to seek, N for another.
@@ -120,7 +145,11 @@ export default function MoodScreen() {
           break;
         case 'n':
         case 'N':
-          requestTrack(scoreRef.current);
+          goNext();
+          break;
+        case 'p':
+        case 'P':
+          goPrevious();
           break;
         default:
           return;
@@ -128,7 +157,7 @@ export default function MoodScreen() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [playback, requestTrack]);
+  }, [goNext, goPrevious, playback]);
 
   if (session.isLoading) {
     return (
@@ -206,6 +235,9 @@ export default function MoodScreen() {
         durationMs={playback.durationMs}
         seekable={playback.seekable}
         onSkip={() => requestTrack(score)}
+        onPrevious={goPrevious}
+        onNext={goNext}
+        canGoBack={history.canGoBack}
         onTogglePlay={() => {
           if (playback.isPlaying) {
             playback.pause();
