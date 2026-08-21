@@ -43,7 +43,17 @@ function loadRemote(): SpotifyRemoteModule | null {
 
 export const spotifyRemoteAvailable = (): boolean => loadRemote() !== null;
 
-/** True if the Spotify app is installed and can handle our URIs. */
+/**
+ * Whether iOS will even answer "is Spotify installed?".
+ *
+ * `canOpenURL` only reports truthfully for schemes listed in the app's
+ * `LSApplicationQueriesSchemes`. We declare `spotify` in app.json, but **Expo Go
+ * runs under its own Info.plist**, so in Expo Go the answer is always false --
+ * whether or not Spotify is installed. Treating that as "not installed" is what
+ * made full playback report "couldn't reach Spotify" on a phone that had it.
+ *
+ * So `canOpenURL` is only ever used as a positive signal, never as a veto.
+ */
 export async function isSpotifyInstalled(): Promise<boolean> {
   if (Platform.OS === 'web') return false;
   try {
@@ -58,6 +68,8 @@ export async function isSpotifyInstalled(): Promise<boolean> {
  * caller can decide whether to fall back to the preview.
  */
 export async function playViaSpotify(uri: string): Promise<'remote' | 'deep_link' | 'failed'> {
+  if (Platform.OS === 'web') return 'failed';
+
   const remote = loadRemote();
   if (remote) {
     try {
@@ -71,15 +83,15 @@ export async function playViaSpotify(uri: string): Promise<'remote' | 'deep_link
     }
   }
 
-  if (await isSpotifyInstalled()) {
-    try {
-      await Linking.openURL(uri);
-      return 'deep_link';
-    } catch {
-      return 'failed';
-    }
+  // Attempt the open rather than asking permission first. `openURL` is not
+  // subject to the LSApplicationQueriesSchemes restriction that makes
+  // `canOpenURL` lie inside Expo Go, and it fails cleanly if Spotify is absent.
+  try {
+    await Linking.openURL(uri);
+    return 'deep_link';
+  } catch {
+    return 'failed';
   }
-  return 'failed';
 }
 
 export async function pauseSpotify(): Promise<void> {

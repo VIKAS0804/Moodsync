@@ -274,12 +274,21 @@ export function usePlayback() {
         }
       }
 
-      const reason =
-        preference === 'full'
-          ? "Couldn't reach Spotify for the full track — playing a 30s preview."
-          : match.playback_mode === 'spotify_remote'
-            ? 'Full playback needs the Spotify app or a browser — playing a 30s preview.'
-            : 'Spotify Premium required for full tracks — playing a 30s preview.';
+      // Be specific about *why*, because the three causes need different
+      // actions from the listener and "couldn't reach Spotify" implies a
+      // network fault when usually nothing is wrong.
+      let reason: string;
+      if (!match.preview_url) {
+        reason = 'No audio available for this track.';
+      } else if (match.playback_mode !== 'spotify_remote' && preference !== 'full') {
+        reason = 'Spotify Premium required for full tracks — playing a 30s preview.';
+      } else if (webPlaybackSupported) {
+        reason = "Spotify wouldn't start the full track — playing a 30s preview.";
+      } else {
+        reason =
+          'Full tracks need the Spotify app on this device (in-app playback ' +
+          'needs a development build) — playing a 30s preview.';
+      }
 
       if (match.preview_url) {
         playPreview(match.preview_url, reason);

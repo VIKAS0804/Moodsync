@@ -278,6 +278,14 @@ Spotify access token in the browser — hence `GET /auth/spotify/playback-token`
 deliberate and documented exception to keeping tokens server-side. Everything else
 still uses the server's copy.
 
+On a phone in Expo Go there is no in-app full playback: the Web Playback SDK has
+no React Native build and the App Remote SDK needs a development build, so
+**Full song** deep-links into the Spotify app. Note that `Linking.canOpenURL`
+can't be used to detect Spotify there — it only answers truthfully for schemes in
+the app's own `LSApplicationQueriesSchemes`, and Expo Go runs under its own
+Info.plist, so it reports "not installed" regardless. Attempt `openURL` instead;
+it has no such restriction.
+
 A listener can also *choose*: **Auto / Full song / 30s**. Preview isn't only a
 fallback — it keeps playback inside MoodSync instead of handing the screen to
 Spotify, which is what you want while skimming for a mood.
