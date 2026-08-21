@@ -8,7 +8,10 @@
  * Routes, best first:
  *  1. `spotify_web`  full track, seekable. Web + Premium, via the Web Playback
  *                    SDK. The only licensed route to full audio we control.
- *  2. `spotify_remote` full track via the App Remote SDK on device. Needs a
+ *  2. `spotify_connect` full track on a Spotify device, driven through the Web
+ *                    API from our backend. Keeps the slider on screen on a
+ *                    phone, which the deep link cannot.
+ *  3. `spotify_remote` full track via the App Remote SDK on device. Needs a
  *                    custom dev client, so absent in Expo Go.
  *  3. `spotify_deep_link` full track, but Spotify takes the screen and we lose
  *                    transport control.
@@ -27,6 +30,14 @@ import {
   playViaAppRemote,
 } from '@/playback/spotify';
 import {
+  connectHasDevice,
+  connectPause,
+  connectPlay,
+  connectResume,
+  connectSeek,
+  connectState,
+} from '@/playback/spotifyConnect';
+import {
   activateWebPlayerElement,
   connectWebPlayer,
   disconnectWebPlayer,
@@ -41,6 +52,7 @@ import {
 
 export type PlaybackRoute =
   | 'spotify_web'
+  | 'spotify_connect'
   | 'spotify_remote'
   | 'spotify_deep_link'
   | 'preview'
@@ -106,6 +118,8 @@ export function usePlayback(options: PlaybackOptions = {}) {
   const epochRef = useRef(0);
   /** Last seen web-player progress, for telling "ended" from "paused". */
   const webProgressRef = useRef({ playing: false, positionMs: 0 });
+  /** Same idea for Spotify Connect, which is polled rather than pushed. */
+  const connectProgressRef = useRef({ playing: false, positionMs: 0 });
 
   const setRoute = (next: Partial<PlaybackState>) => {
     if (next.route) routeRef.current = next.route;
@@ -150,8 +164,26 @@ export function usePlayback(options: PlaybackOptions = {}) {
           durationMs: s.durationMs,
           isPlaying: !s.paused,
         }));
+      } else if (route === 'spotify_connect') {
+        const s = await connectState();
+        if (!s) return;
+        // Ending shows up as stopped with the position reset, same as the web
+        // SDK; require prior progress so a manual pause isn't mistaken for it.
+        const previous = connectProgressRef.current;
+        if (!s.isPlaying && s.positionMs === 0 && previous.playing && previous.positionMs > 1000) {
+          connectProgressRef.current = { playing: false, positionMs: 0 };
+          onEndedRef.current?.();
+          return;
+        }
+        connectProgressRef.current = { playing: s.isPlaying, positionMs: s.positionMs };
+        setState((prev) => ({
+          ...prev,
+          positionMs: s.positionMs,
+          durationMs: s.durationMs || prev.durationMs,
+          isPlaying: s.isPlaying,
+        }));
       }
-    }, 500);
+    }, 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -188,6 +220,14 @@ export function usePlayback(options: PlaybackOptions = {}) {
         await pauseSpotify();
       } catch {
         // App Remote not connected.
+      }
+    }
+
+    if (routeRef.current === 'spotify_connect') {
+      try {
+        await connectPause();
+      } catch {
+        // Device went away, or already paused.
       }
     }
     // Deep-link playback is owned by the Spotify app; we can't stop it, which
@@ -292,9 +332,12 @@ export function usePlayback(options: PlaybackOptions = {}) {
         return;
       }
 
-      // Full playback that keeps the listener *here*: the web SDK, or App
-      // Remote on a dev build. `auto` may only ever use these.
-      const inAppFullAvailable = webPlaybackSupported || appRemoteAvailable();
+      // Full playback that keeps the listener *here*: the web SDK, App Remote on
+      // a dev build, or Spotify Connect driving an already-awake device.
+      // `auto` may only ever use these.
+      const connectReady = !webPlaybackSupported && (await connectHasDevice());
+      if (superseded()) return;
+      const inAppFullAvailable = webPlaybackSupported || appRemoteAvailable() || connectReady;
       const wantsFull =
         preference === 'full' ||
         (match.playback_mode === 'spotify_remote' && inAppFullAvailable);
@@ -319,6 +362,27 @@ export function usePlayback(options: PlaybackOptions = {}) {
             durationMs: match.track.duration_ms ?? 0,
           });
           return;
+        }
+
+        // Remote-control an awake Spotify device. Full track, transport
+        // controls, and crucially the slider stays on screen.
+        if (connectReady) {
+          try {
+            await connectPlay(match.track.spotify_uri);
+            if (superseded()) return;
+            connectProgressRef.current = { playing: true, positionMs: 0 };
+            setRoute({
+              route: 'spotify_connect',
+              isPlaying: true,
+              seekable: true,
+              degradedReason: null,
+              positionMs: 0,
+              durationMs: match.track.duration_ms ?? 0,
+            });
+            return;
+          } catch {
+            // Device went to sleep between the check and the play call.
+          }
         }
       }
 
@@ -378,6 +442,7 @@ export function usePlayback(options: PlaybackOptions = {}) {
     const route = routeRef.current;
     if (route === 'preview') playerRef.current?.pause();
     else if (route === 'spotify_web') await webPlayerPause();
+    else if (route === 'spotify_connect') await connectPause().catch(() => undefined);
     else if (route === 'spotify_remote') await pauseSpotify();
     setState((prev) => ({ ...prev, isPlaying: false }));
   }, []);
@@ -386,6 +451,7 @@ export function usePlayback(options: PlaybackOptions = {}) {
     const route = routeRef.current;
     if (route === 'preview') playerRef.current?.play();
     else if (route === 'spotify_web') await webPlayerResume();
+    else if (route === 'spotify_connect') await connectResume().catch(() => undefined);
     else return; // deep link / nothing to resume
     setState((prev) => ({ ...prev, isPlaying: true }));
   }, []);
@@ -398,6 +464,8 @@ export function usePlayback(options: PlaybackOptions = {}) {
       await playerRef.current?.seekTo(clamped / 1000);
     } else if (route === 'spotify_web') {
       await webPlayerSeek(clamped);
+    } else if (route === 'spotify_connect') {
+      await connectSeek(clamped).catch(() => undefined);
     } else {
       return; // deep link / nothing playing
     }

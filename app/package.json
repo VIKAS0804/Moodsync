@@ -8,7 +8,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "verify": "tsc --noEmit && expo export --platform all --output-dir .verify-dist && node scripts/check-bundles.mjs"
+    "verify": "tsc --noEmit && expo export --platform all --output-dir .verify-dist && node scripts/check-bundles.mjs",
+    "start:alt": "expo start --port 8090"
   },
   "dependencies": {
     "@react-native-community/slider": "5.0.1",

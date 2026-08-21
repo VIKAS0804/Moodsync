@@ -1,3 +1,3 @@
-from app.routers import auth, mood, sync
+from app.routers import auth, mood, playback, sync
 
-__all__ = ["auth", "mood", "sync"]
+__all__ = ["auth", "mood", "playback", "sync"]

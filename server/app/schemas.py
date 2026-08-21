@@ -88,6 +88,39 @@ class SyncResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+# ------------------------------------------------------------------- playback
+
+
+class SpotifyDevice(BaseModel):
+    id: str
+    name: str
+    type: str
+    is_active: bool
+    volume_percent: int | None = None
+
+
+class PlaybackDevicesResponse(BaseModel):
+    devices: list[SpotifyDevice]
+
+
+class PlaybackStartRequest(BaseModel):
+    uri: str
+    # Omit to use the active device, or the only one available.
+    device_id: str | None = None
+
+
+class PlaybackSeekRequest(BaseModel):
+    position_ms: int = Field(..., ge=0)
+
+
+class PlaybackStateResponse(BaseModel):
+    is_playing: bool
+    position_ms: int = 0
+    duration_ms: int = 0
+    track_uri: str | None = None
+    device_name: str | None = None
+
+
 # ----------------------------------------------------------------------- mood
 
 

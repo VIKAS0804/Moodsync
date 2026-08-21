@@ -7,6 +7,7 @@ import type { PlaybackRoute } from '@/playback/usePlayback';
 
 const ROUTE_LABEL: Record<PlaybackRoute, string> = {
   spotify_web: 'Full track',
+  spotify_connect: 'Full track via Spotify',
   spotify_remote: 'Full track via Spotify',
   spotify_deep_link: 'Opened in Spotify',
   preview: '30s preview',

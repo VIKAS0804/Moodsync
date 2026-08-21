@@ -13,7 +13,7 @@ from app.clients.storage import PreviewCache
 from app.config import Settings, get_settings
 from app.db import engine, init_db
 from app.deps import settings_dep
-from app.routers import auth, mood, sync
+from app.routers import auth, mood, playback, sync
 from app.schemas import HealthResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -53,6 +53,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(sync.router)
 app.include_router(mood.router)
+app.include_router(playback.router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["meta"])

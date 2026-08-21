@@ -25,7 +25,10 @@ function hintFor(value: PlaybackPreference, hasPremium: boolean): string {
         : 'Previews here, so the slider stays usable';
     case 'full':
       if (!hasPremium) return 'Full tracks need Premium — this falls back to a preview';
-      return inApp ? 'Plays here, with seeking' : 'Opens the Spotify app — you leave MoodSync';
+      if (inApp) return 'Plays here, with seeking';
+      // On a phone we drive Spotify remotely once it's awake, so the slider
+      // stays usable; only the very first track may need to open the app.
+      return 'Controls Spotify — open it once, then stay here';
     case 'preview':
       return 'Stay in MoodSync, quick to skim';
   }

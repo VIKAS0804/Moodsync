@@ -299,6 +299,7 @@ Spotify's player. Four tiers, best first:
 | Route | Full track | Seek | Requires |
 |---|---|---|---|
 | **Web Playback SDK** | yes | **yes** | Web + Premium |
+| **Spotify Connect** (backend-driven) | yes | **yes** | Premium + an awake Spotify device |
 | App Remote SDK | yes | yes | Custom dev client (native) |
 | `spotify:` deep link | yes | no — Spotify takes the screen | Spotify app installed |
 | 30s preview (`expo-audio`) | no | yes | nothing |
@@ -320,6 +321,13 @@ still uses the server's copy.
 On a phone in Expo Go there is no in-app full playback: the Web Playback SDK has
 no React Native build and the App Remote SDK needs a development build, so
 **Full song** deep-links into the Spotify app.
+
+**Spotify Connect keeps the slider on screen.** `user-modify-playback-state`
+lets the *backend* drive any device the account has awake, so on a phone MoodSync
+treats the Spotify app as a speaker: change track, pause, seek, read position,
+all without leaving. `/playback/*` proxies it. Spotify only lists devices that
+are awake, so the first track may still need one deep link to wake the app —
+after that, control is remote.
 
 **`auto` never deep-links.** Leaving for Spotify costs the slider, and the
 slider is the product — nudging mid-song is the entire interaction. So `auto`
@@ -406,8 +414,8 @@ makes it exit 1.
 |---|---|---|
 | Slider, scoring, corrections | yes | yes |
 | 30s previews, seeking, auto-advance | yes | yes |
-| Full track in-app, with seeking | **yes** (Playback SDK + Premium) | no — needs a dev build |
-| Full track via the Spotify app | n/a | yes, on explicit *Full song* |
+| Full track in-app, with seeking | **yes** (Playback SDK + Premium) | **yes** via Spotify Connect, once Spotify is awake |
+| Full track via the Spotify app | n/a | fallback, on explicit *Full song* |
 | Background audio (screen locked) | n/a | yes |
 | Lock screen / Bluetooth metadata | yes (Media Session) | **no** — `expo-audio` 1.1.1 has no now-playing API |
 | Keyboard transport | yes | n/a |
