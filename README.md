@@ -388,9 +388,29 @@ time you landed on 72, which reads as broken.
 ## Tests
 
 ```bash
-cd server && .venv/bin/python -m pytest -q     # 60 passed
-cd app && npm run typecheck
+cd server && .venv/bin/python -m pytest -q     # 95 passed
+cd app && npm run verify                       # typecheck + all 3 bundles + guards
 ```
+
+`npm run verify` exists because typecheck and a web bundle are not enough. Both
+compiled cleanly through two crashes that only happened on a device:
+`window.addEventListener` is undefined in React Native even though `window`
+isn't, and `Platform.OS` is the only reliable way to gate DOM APIs. So verify
+builds **web, iOS and Android** bundles and greps the source for DOM-only
+globals reached without a `Platform.OS` guard. Reintroducing that exact bug
+makes it exit 1.
+
+### What works on which platform
+
+| | Web | Phone (Expo Go) |
+|---|---|---|
+| Slider, scoring, corrections | yes | yes |
+| 30s previews, seeking, auto-advance | yes | yes |
+| Full track in-app, with seeking | **yes** (Playback SDK + Premium) | no — needs a dev build |
+| Full track via the Spotify app | n/a | yes, on explicit *Full song* |
+| Background audio (screen locked) | n/a | yes |
+| Lock screen / Bluetooth metadata | yes (Media Session) | **no** — `expo-audio` 1.1.1 has no now-playing API |
+| Keyboard transport | yes | n/a |
 
 The DSP tests synthesize audio rather than hitting any API, so they run offline. That
 is also their limitation, and it hid two real bugs that only appeared on real music:

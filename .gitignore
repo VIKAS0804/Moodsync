@@ -50,3 +50,6 @@ calibration_report.json
 
 # --- Reference clone of a comparable project, not part of this repo ---
 VibeScape-main/
+
+# --- Verify output ---
+.verify-dist/
