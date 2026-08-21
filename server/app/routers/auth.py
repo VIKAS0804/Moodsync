@@ -35,6 +35,7 @@ from app.schemas import (
     MeResponse,
     PairClaimRequest,
     PairClaimResponse,
+    PairCodeResponse,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -315,6 +316,22 @@ def _issue_pairing_code(session_token: str) -> str:
             _PAIRING[code] = (session_token, now)
             return code
     raise HTTPException(status_code=503, detail="Could not allocate a pairing code")
+
+
+@router.post("/pair/new", response_model=PairCodeResponse)
+def create_pairing_code(user: User = Depends(get_current_user)) -> PairCodeResponse:
+    """Mint a pairing code for an already-signed-in session.
+
+    Without this the only way to get a code is to complete the browser login
+    again -- and that rotates the session token, logging out whichever device
+    was already using it. Pairing a second device shouldn't cost you the first.
+    """
+    if not user.session_token:
+        raise HTTPException(status_code=401, detail="This session has been signed out")
+    return PairCodeResponse(
+        code=_issue_pairing_code(user.session_token),
+        expires_in=_PAIRING_TTL_SECONDS,
+    )
 
 
 @router.post("/pair/claim", response_model=PairClaimResponse)

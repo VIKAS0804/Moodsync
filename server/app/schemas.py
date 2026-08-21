@@ -39,6 +39,11 @@ class PairClaimRequest(BaseModel):
     code: str = Field(..., min_length=4, max_length=12)
 
 
+class PairCodeResponse(BaseModel):
+    code: str
+    expires_in: int
+
+
 class PairClaimResponse(BaseModel):
     session_token: str
     display_name: str | None

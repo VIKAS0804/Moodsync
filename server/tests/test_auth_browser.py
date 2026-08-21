@@ -170,3 +170,22 @@ def test_pairing_a_revoked_session_fails(client, db, seeded_user):
 def test_pairing_codes_are_six_digits(db, seeded_user):
     code = auth._issue_pairing_code(seeded_user.session_token)
     assert len(code) == 6 and code.isdigit()
+
+
+def test_signed_in_session_can_mint_a_pairing_code(client, db, seeded_user):
+    """Pairing a second device must not cost you the first."""
+    original = seeded_user.session_token
+
+    body = client.post("/auth/pair/new", headers={"Authorization": f"Bearer {original}"}).json()
+    assert len(body["code"]) == 6
+    assert body["expires_in"] == auth._PAIRING_TTL_SECONDS
+
+    # The code resolves to the *same* session, unrotated.
+    claimed = client.post("/auth/pair/claim", json={"code": body["code"]}).json()
+    assert claimed["session_token"] == original
+    db.refresh(seeded_user)
+    assert seeded_user.session_token == original
+
+
+def test_minting_a_pairing_code_requires_a_session(client):
+    assert client.post("/auth/pair/new").status_code == 401

@@ -174,6 +174,10 @@ So sign in on a computer and pair the phone:
 2. It shows a **6-digit code** (valid 5 minutes, single use)
 3. Type it into the app's *"Signed in on your computer?"* box
 
+Already signed in somewhere? Use **Library → Get a pairing code** instead.
+Re-running the login would rotate the session token and sign that device out;
+`POST /auth/pair/new` issues a code against the session you already have.
+
 Nothing to register, and it survives an IP change.
 
 ## The mood pipeline

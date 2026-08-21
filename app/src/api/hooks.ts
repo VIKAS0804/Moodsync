@@ -108,6 +108,19 @@ export function useLabelTrack() {
   });
 }
 
+/**
+ * Mint a pairing code from the session this device already has.
+ *
+ * The alternative -- re-running the browser login -- rotates the session token
+ * and signs out whatever was already using it. Pairing a phone shouldn't log
+ * out the laptop.
+ */
+export function useCreatePairingCode() {
+  return useMutation<{ code: string; expires_in: number }, Error, void>({
+    mutationFn: async () => (await api.post('/auth/pair/new')).data,
+  });
+}
+
 export function useLogout() {
   const queryClient = useQueryClient();
   return useMutation({

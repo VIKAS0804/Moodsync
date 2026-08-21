@@ -2,7 +2,14 @@ import { useRouter } from 'expo-router';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { describeError } from '@/api/client';
-import { useLogout, useMe, useSession, useSyncLibrary, useSyncStatus } from '@/api/hooks';
+import {
+  useCreatePairingCode,
+  useLogout,
+  useMe,
+  useSession,
+  useSyncLibrary,
+  useSyncStatus,
+} from '@/api/hooks';
 import { moodColor } from '@/lib/mood';
 
 export default function LibraryScreen() {
@@ -11,6 +18,7 @@ export default function LibraryScreen() {
   const me = useMe(Boolean(session.data));
   const sync = useSyncLibrary();
   const logout = useLogout();
+  const pairing = useCreatePairingCode();
 
   const status = useSyncStatus(Boolean(session.data), sync.isPending);
   const pending = status.data?.pending ?? 0;
@@ -95,6 +103,37 @@ export default function LibraryScreen() {
           {pending} tracks still being analysed in the background.
         </Text>
       ) : null}
+
+      {/* Pair another device without re-running the login, which would rotate
+          this session's token and sign this device out. */}
+      <View className="mt-6 rounded-2xl border border-ink-600 bg-ink-800/60 p-4">
+        <Text className="text-sm font-semibold text-slate-200">Use this account on another device</Text>
+        {pairing.data ? (
+          <>
+            <Text className="mt-3 text-center font-mono text-4xl tracking-[10px] text-emerald-400">
+              {pairing.data.code}
+            </Text>
+            <Text className="mt-2 text-center text-[10px] text-slate-500">
+              Enter it on the other device's sign-in screen. Valid{' '}
+              {Math.round(pairing.data.expires_in / 60)} minutes, single use.
+            </Text>
+          </>
+        ) : (
+          <Text className="mt-1 text-xs text-slate-500">
+            Generates a 6-digit code. Your session here stays signed in.
+          </Text>
+        )}
+        <Pressable
+          onPress={() => pairing.mutate()}
+          disabled={pairing.isPending}
+          className="mt-3 items-center rounded-xl border border-slate-500 py-3 active:opacity-70"
+          accessibilityRole="button"
+        >
+          <Text className="text-slate-200">
+            {pairing.isPending ? 'Generating…' : pairing.data ? 'New code' : 'Get a pairing code'}
+          </Text>
+        </Pressable>
+      </View>
 
       <Pressable
         onPress={async () => {
